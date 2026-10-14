@@ -1,0 +1,142 @@
+# ============================================================
+# DOCKER COMPOSE — AI PROJECT AGENT INFRASTRUCTURE
+# Privacy Shield Camera Project
+# ============================================================
+# Services:
+#   - postgres    : PostgreSQL 16 + pgvector (Long-term Memory & RAG)
+#   - redis       : Redis 7 (Short-term Memory / LangGraph Checkpoints)
+#   - langfuse    : AgentOps Dashboard (self-hosted, MIT)
+#   - litellm     : LLM Gateway (Budget, Rate Limit, Governance)
+# Ollama is intentionally host-managed at http://localhost:11434 and is not a Compose service.
+# ============================================================
+
+services:
+
+  # ──────────────────────────────────────────────────────────
+  # 1. PostgreSQL 16 + pgvector
+  #    - Long-term Memory (Mem0 facts, project decisions)
+  #    - RAG Vector Store (document & code embeddings)
+  #    - Langfuse metadata storage
+  # ──────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: privacy_shield_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-privacy_shield_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-agent_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_user} -d ${POSTGRES_DB:-privacy_shield_agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent_net
+
+  # ──────────────────────────────────────────────────────────
+  # 2. Redis 7 (Alpine)
+  #    - LangGraph Checkpointer (lưu state giữa các node)
+  #    - Mem0 cache layer
+  #    - Session short-term memory
+  # ──────────────────────────────────────────────────────────
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: privacy_shield_redis
+    restart: unless-stopped
+    environment:
+      REDIS_ARGS: "--requirepass ${REDIS_PASSWORD:-changeme} --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1 --loglevel warning"
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent_net
+
+  # ──────────────────────────────────────────────────────────
+  # 3. Langfuse — AgentOps Dashboard (AgentOps Pillar)
+  #    - Trace từng bước LLM call
+  #    - Đo latency, token cost
+  #    - Prompt management & evaluation dashboard
+  #    Dashboard: http://localhost:3000
+  # ──────────────────────────────────────────────────────────
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: privacy_shield_langfuse
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent_user}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-privacy_shield_agent}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme_nextauth_secret_32}
+      SALT: ${LANGFUSE_SALT:-changeme_salt_32chars}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    networks:
+      - agent_net
+
+  # ──────────────────────────────────────────────────────────
+  # 4. LiteLLM Proxy — LLM Gateway (Governance Pillar)
+  #    - Single endpoint cho mọi LLM (OpenAI, Gemini, Ollama)
+  #    - Budget caps, Rate limiting, Audit logging
+  #    - API: http://localhost:4000
+  #    - Dashboard: http://localhost:4000/ui
+  # ──────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: privacy_shield_litellm
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-changeme}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent_user}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-privacy_shield_agent}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Trỏ Ollama vào host Windows
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    networks:
+      - agent_net
+
+# ──────────────────────────────────────────────────────────
+# Volumes (dữ liệu được lưu vĩnh viễn)
+# ──────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    name: privacy_shield_postgres_data
+  redis_data:
+    name: privacy_shield_redis_data
+
+# ──────────────────────────────────────────────────────────
+# Networks
+# ──────────────────────────────────────────────────────────
+networks:
+  agent_net:
+    name: privacy_shield_agent_network
+    driver: bridge

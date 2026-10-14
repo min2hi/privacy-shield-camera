@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets and local infrastructure state
+.env
+infra/.env
+*.pem
+*.key
+
+# Runtime logs and generated evidence
+logs/
+runs/
+artifacts/
+dist/
+build/
+*.spec
+
+# Private/generated datasets and checkpoints
+data/
+datasets/
+privacy-shield-app/data/
+privacy-shield-app/configs/registered_face.npy
+privacy-shield-app/models/checkpoints/
+privacy-shield-app/models/*.engine
+privacy-shield-app/models/*.onnx.tmp
+
+# Keep the small development assets already shipped with the prototype.
+!privacy-shield-app/models/yolov8n.pt
+!privacy-shield-app/models/face_detection_yunet.onnx
+!privacy-shield-app/models/mobilefacenet.onnx

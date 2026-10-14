@@ -1,0 +1,74 @@
+app:
+  name: "Privacy Shield Camera"
+  privacy_mode: "medium" # preset: low, medium, high
+
+camera:
+  device_index: 0
+  width: 640
+  height: 480
+  fps: 30
+  max_read_failures: 30
+  read_retry_delay_ms: 30
+
+output:
+  virtual_camera:
+    enabled: false           # Bật sau khi cài backend/driver và chạy hardware acceptance
+
+model:
+  path: "models/yolov8n.pt" # Dùng YOLOv8n pretrained để smoke test trước
+  manifest_path: "models/yolov8n.dev-manifest.json"
+  confidence: 0.25          # Confidence threshold
+  iou: 0.45                 # IoU threshold
+  image_size: 320
+  
+  # Danh sách class đối tượng và cấu hình mức rủi ro mặc định
+  class_mask_presets:
+    cell phone: "mosaic"
+    id_card: "solid_mask"
+    credit_card: "solid_mask"
+    qr_code: "solid_mask"
+    receipt: "mosaic"
+    smartphone_screen: "mosaic"
+    document: "gaussian_blur"
+
+privacy:
+  mask_mode: "mosaic"       # Giá trị fallback: solid_mask, mosaic, gaussian_blur
+  expand_bbox_ratio: 0.15   # Mở rộng bounding box 15%
+  hold_frames: 5            # Số frame giữ lại bbox cũ khi bị miss (temporal smoothing)
+  fail_safe: true           # Không xuất video thô nếu pipeline lỗi
+  
+  # Cơ chế Frame Skipping
+  frame_skipping:
+    enabled: true
+    skip_ratio: 2           # Chạy YOLO mỗi 2 frame, các frame còn lại reuse bbox
+
+privacy_presets:
+  low:
+    mask_mode: "gaussian_blur"
+    expand_bbox_ratio: 0.05
+    hold_frames: 2
+    frame_skipping:
+      enabled: true
+      skip_ratio: 3         # Máy yếu/chế độ thấp: skip nhiều hơn
+  medium:
+    mask_mode: "mosaic"
+    expand_bbox_ratio: 0.15
+    hold_frames: 5
+    frame_skipping:
+      enabled: true
+      skip_ratio: 2
+  high:
+    mask_mode: "solid_mask"
+    expand_bbox_ratio: 0.25
+    hold_frames: 8
+    frame_skipping:
+      enabled: false         # Chế độ cao: ưu tiên chính xác, không skip frame
+
+# Cấu hình Nhận diện và Che phủ khuôn mặt nâng cao
+face_recognition:
+  enabled: true
+  model_dir: "models"
+  template_path: "configs/registered_face.npy"
+  threshold: 1.10            # Ngưỡng khoảng cách Euclidean (Chuẩn MobileFaceNet L2: 1.05 - 1.15. Dưới 1.05 sẽ rất khó nhận diện nếu đổi góc mặt)
+  mask_owner: true           # Tự động che khuôn mặt chủ sở hữu nếu phát hiện khớp mẫu
+  mask_stranger: false       # Tự động che khuôn mặt người lạ (những khuôn mặt không khớp mẫu)
