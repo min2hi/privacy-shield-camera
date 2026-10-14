@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     document_type   VARCHAR(50) NOT NULL,         -- 'docs', 'code', 'architecture'
     chunk_index     INTEGER NOT NULL,             -- thứ tự chunk trong file
     content         TEXT NOT NULL,               -- nội dung text thô
-    embedding       vector(1536),                -- vector 1536 chiều (OpenAI) hoặc 768 (Ollama)
+    embedding       vector(384),                 -- vector 384 chiều (all-MiniLM-L6-v2 local mặc định) hoặc 1536 (OpenAI)
     metadata        JSONB DEFAULT '{}',          -- {filename, language, last_modified}
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(document_id, chunk_index)

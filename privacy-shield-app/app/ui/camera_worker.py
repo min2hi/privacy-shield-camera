@@ -15,6 +15,8 @@ from PySide6.QtGui import QImage
 
 logger = get_logger(__name__)
 
+# Sentinel object to distinguish "no change" from "set to None"
+_UNSET = object()
 
 
 class DemoVideoCapture:
@@ -97,6 +99,9 @@ class CameraWorker(QThread):
     frame_ready = Signal(QImage, dict)
     enroll_result = Signal(bool, str)  # Signal báo kết quả đăng ký khuôn mặt mẫu (thành công, thông báo)
     camera_error = Signal(str)
+    face_delete_result = Signal(bool)  # Signal báo kết quả xóa mẫu mặt (đã xóa hay không)
+    face_status_update = Signal(int)   # Signal cập nhật số lượng embeddings đã đăng ký
+
 
     def __init__(
         self,
@@ -132,17 +137,21 @@ class CameraWorker(QThread):
 
     def request_pose_enrollment(self, pose_index):
         """Kích hoạt yêu cầu quét góc mặt mẫu cụ thể (0: nhìn thẳng, 1: nghiêng trái, 2: nghiêng phải)."""
-        self.enroll_pose_index = pose_index
-        self.enroll_start_time = time.time()
+        with self._config_lock:
+            self.enroll_pose_index = pose_index
+            self.enroll_start_time = time.time()
 
-    def update_config(self, safe_mode=None, override_mask=None, selected_classes=None,
+    def update_config(self, safe_mode=None, override_mask=_UNSET, selected_classes=None,
                       confidence=None, mask_owner_face=None, mask_strangers_face=None,
-                      virtual_camera_enabled=None):
+                      virtual_camera_enabled=None,
+                      default_mask_mode=None, expand_ratio=None,
+                      hold_frames=None, scheduler_enabled=None,
+                      scheduler_skip_ratio=None, reset_tracking=None):
         """Thread-safe: cập nhật cấu hình từ UI thread."""
         with self._config_lock:
             if safe_mode is not None:
                 self.safe_mode_active = safe_mode
-            if override_mask is not None:
+            if override_mask is not _UNSET:
                 self.override_mask_mode = override_mask
             if selected_classes is not None:
                 self.selected_classes = list(selected_classes)
@@ -154,6 +163,18 @@ class CameraWorker(QThread):
                 self._pending_mask_stranger = mask_strangers_face
             if virtual_camera_enabled is not None:
                 self._pending_vcam = virtual_camera_enabled
+            if default_mask_mode is not None:
+                self._pending_default_mask_mode = default_mask_mode
+            if expand_ratio is not None:
+                self._pending_expand_ratio = expand_ratio
+            if hold_frames is not None:
+                self._pending_hold_frames = hold_frames
+            if scheduler_enabled is not None:
+                self._pending_scheduler_enabled = scheduler_enabled
+            if scheduler_skip_ratio is not None:
+                self._pending_scheduler_skip_ratio = scheduler_skip_ratio
+            if reset_tracking is not None:
+                self._pending_reset_tracking = bool(reset_tracking)
 
     def _get_config(self):
         """Thread-safe: đọc cấu hình hiện tại trong worker thread."""
@@ -168,11 +189,27 @@ class CameraWorker(QThread):
             pending_owner = getattr(self, '_pending_mask_owner', None)
             pending_stranger = getattr(self, '_pending_mask_stranger', None)
             pending_vcam = getattr(self, '_pending_vcam', None)
+            pending_default_mask = getattr(self, '_pending_default_mask_mode', None)
+            pending_expand = getattr(self, '_pending_expand_ratio', None)
+            pending_hold = getattr(self, '_pending_hold_frames', None)
+            pending_sched_en = getattr(self, '_pending_scheduler_enabled', None)
+            pending_sched_skip = getattr(self, '_pending_scheduler_skip_ratio', None)
+            pending_reset_tracking = getattr(self, '_pending_reset_tracking', False)
+            pending_face_delete = getattr(self, '_pending_face_delete', False)
+            pending_face_save = getattr(self, '_pending_face_save', False)
             # Clear pending
             self._pending_confidence = None
             self._pending_mask_owner = None
             self._pending_mask_stranger = None
             self._pending_vcam = None
+            self._pending_default_mask_mode = None
+            self._pending_expand_ratio = None
+            self._pending_hold_frames = None
+            self._pending_scheduler_enabled = None
+            self._pending_scheduler_skip_ratio = None
+            self._pending_reset_tracking = False
+            self._pending_face_delete = False
+            self._pending_face_save = False
         # Apply outside lock (pipeline mutations are now on worker thread)
         if pending_conf is not None:
             self.pipeline.detector.confidence = pending_conf
@@ -182,7 +219,25 @@ class CameraWorker(QThread):
             self.pipeline.mask_strangers_face = pending_stranger
         if pending_vcam is not None:
             self._apply_vcam_change(pending_vcam)
+        if pending_default_mask is not None and hasattr(self.pipeline, "masker"):
+            self.pipeline.masker.default_mask_mode = pending_default_mask
+        if pending_expand is not None and hasattr(self.pipeline, "masker"):
+            self.pipeline.masker.expand_ratio = pending_expand
+        if pending_hold is not None and hasattr(self.pipeline, "smoothing"):
+            self.pipeline.smoothing.hold_frames = pending_hold
+        if pending_sched_en is not None and hasattr(self.pipeline, "scheduler"):
+            self.pipeline.scheduler.enabled = pending_sched_en
+        if pending_sched_skip is not None and hasattr(self.pipeline, "scheduler"):
+            self.pipeline.scheduler.skip_ratio = max(1, pending_sched_skip)
+        if pending_reset_tracking and hasattr(self.pipeline, "reset_tracking"):
+            self.pipeline.reset_tracking()
+        if pending_face_delete:
+            removed = self.pipeline.face_recognizer.delete_registered_faces()
+            self.face_delete_result.emit(removed)
+        if pending_face_save:
+            self.pipeline.face_recognizer.save_registered_faces()
         return config
+
 
     def _apply_vcam_change(self, enabled):
         """Bật/tắt virtual camera output trong worker thread."""

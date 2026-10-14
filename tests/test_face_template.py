@@ -87,3 +87,15 @@ def test_face_template_invalid_encrypted_data(tmp_path):
     recognizer.registered_face_path.write_bytes(b"not_a_valid_fernet_token_or_numpy")
     assert recognizer.load_registered_face() == []
 
+
+def test_face_template_model_sha256_mismatch_is_rejected(tmp_path):
+    recognizer = recognizer_without_runtime(tmp_path)
+    recognizer.registered_embeddings = [
+        np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    ]
+    assert recognizer.save_registered_faces()
+    # Modify the model file on disk so its SHA256 no longer matches metadata
+    recognizer.model_path.write_bytes(b"different model weights v2")
+    assert recognizer.load_registered_face() == []
+
+

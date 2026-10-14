@@ -3,8 +3,13 @@ enroll_dialog.py — Hộp thoại đăng ký khuôn mặt mẫu đa hướng (M
 Thiết kế Wizard 3 bước chuẩn UX cao cấp.
 """
 
+from contextlib import nullcontext
+
+from app.utils.logging_config import get_logger
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+logger = get_logger(__name__)
 
 
 class FaceEnrollmentDialog(QDialog):
@@ -13,12 +18,14 @@ class FaceEnrollmentDialog(QDialog):
         self.worker = worker
         self.current_step = 0  # 0: Nhìn thẳng, 1: Nghiêng trái, 2: Nghiêng phải
         
-        # Sao lưu embeddings trước khi bắt đầu enrollment để revert nếu cancel
+        # Sao lưu embeddings trước khi bắt đầu enrollment để revert nếu cancel (thread-safe)
         self._backup_embeddings = None
         if hasattr(worker, 'pipeline') and hasattr(worker.pipeline, 'face_recognizer'):
             fr = worker.pipeline.face_recognizer
             if hasattr(fr, 'registered_embeddings'):
-                self._backup_embeddings = list(fr.registered_embeddings)  # shallow copy
+                lock = getattr(fr, '_get_lock', lambda: None)() or nullcontext()
+                with lock:
+                    self._backup_embeddings = list(fr.registered_embeddings)  # shallow copy
         
         self.setWindowTitle("Đăng Ký Khuôn Mặt Mẫu (Multi-Pose)")
         self.setFixedSize(500, 360)
@@ -233,20 +240,26 @@ class FaceEnrollmentDialog(QDialog):
             
     def reject(self):
         """Khôi phục trạng thái nhận diện bình thường và revert embeddings khi hủy đăng ký."""
-        self.worker.enroll_pose_index = -1
-        # Revert embeddings về trạng thái trước enrollment
+        w_lock = getattr(self.worker, '_config_lock', None) or nullcontext()
+        with w_lock:
+            self.worker.enroll_pose_index = -1
+        # Revert embeddings về trạng thái trước enrollment (thread-safe)
         if self._backup_embeddings is not None:
             if hasattr(self.worker, 'pipeline') and hasattr(self.worker.pipeline, 'face_recognizer'):
-                self.worker.pipeline.face_recognizer.registered_embeddings = self._backup_embeddings
+                fr = self.worker.pipeline.face_recognizer
+                f_lock = getattr(fr, '_get_lock', lambda: None)() or nullcontext()
+                with f_lock:
+                    fr.registered_embeddings = self._backup_embeddings
         super().reject()
         
     def accept(self):
         """Lưu embeddings xuống đĩa và khôi phục trạng thái bình thường khi user xác nhận."""
-        self.worker.enroll_pose_index = -1
+        w_lock = getattr(self.worker, '_config_lock', None) or nullcontext()
+        with w_lock:
+            self.worker.enroll_pose_index = -1
         # Chỉ save khi user nhấn HOÀN THÀNH (không save sớm trong worker)
         if hasattr(self.worker, 'pipeline') and hasattr(self.worker.pipeline, 'face_recognizer'):
             saved = self.worker.pipeline.face_recognizer.save_registered_faces()
             if saved:
-                from app.utils.console import safe_print
-                safe_print("EnrollDialog: face templates saved to disk on user confirmation")
+                logger.info("EnrollDialog: face templates saved to disk on user confirmation")
         super().accept()

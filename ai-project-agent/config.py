@@ -40,9 +40,9 @@ LITELLM_MASTER_KEY: str = os.getenv("LITELLM_MASTER_KEY", "sk-litellm-changeme")
 # Model mặc định khi phát triển (dùng Ollama local, miễn phí)
 DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "local/llama3.2")
 
-# Model cho embedding (tạo vector cho RAG)
-EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "1536"))
+# Model cho embedding (tạo vector cho RAG — mặc định dùng local 384 chiều)
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "384"))
 
 # ──────────────────────────────────────────────────────────
 # Langfuse (AgentOps)
