@@ -2,14 +2,91 @@
 camera_worker.py — Luồng chạy camera nền (QThread) cho Privacy Shield App.
 """
 
+import math
 import threading
 import time
 
 import cv2
+import numpy as np
 from app.core.virtual_camera import VirtualCameraOutput
 from app.utils.console import safe_print
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
+
+
+class DemoVideoCapture:
+    """Bộ phát khung hình mô phỏng trực quan (30 FPS) chứa CCCD, Thẻ Ngân hàng, QR Code, Hóa đơn để demo trực tiếp trên giao diện."""
+
+    def __init__(self, width=640, height=480):
+        self.width = width
+        self.height = height
+        self._opened = True
+        self._tick = 0
+
+    def isOpened(self):
+        return self._opened
+
+    def set(self, prop, value):
+        if prop == cv2.CAP_PROP_FRAME_WIDTH:
+            self.width = int(value)
+        elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
+            self.height = int(value)
+        return True
+
+    def read(self):
+        if not self._opened:
+            return False, None
+        self._tick += 1
+        t = self._tick * 0.06
+        w, h = self.width, self.height
+        frame = np.full((h, w, 3), (34, 38, 46), dtype=np.uint8)
+
+        # Nền phòng làm việc giả lập nhẹ nhàng
+        cv2.rectangle(frame, (0, 0), (w, int(h * 0.72)), (44, 50, 62), -1)
+        cv2.rectangle(frame, (0, int(h * 0.72)), (w, h), (28, 31, 38), -1)
+
+        dx = int(math.sin(t) * 10)
+        dy = int(math.cos(t * 0.8) * 6)
+
+        # 1. Thẻ Căn Cước Công Dân giả lập (id_card: tỷ lệ ~ 1.58, độ bão hòa màu thấp)
+        ix1, iy1 = 36 + dx, 55 + dy
+        ix2, iy2 = ix1 + 210, iy1 + 132
+        cv2.rectangle(frame, (ix1, iy1), (ix2, iy2), (232, 236, 240), -1)
+        cv2.rectangle(frame, (ix1, iy1), (ix2, iy2), (90, 100, 115), 2)
+        cv2.rectangle(frame, (ix1 + 12, iy1 + 34), (ix1 + 64, iy1 + 108), (160, 165, 175), -1)
+        cv2.putText(frame, "CAN CUOC CONG DAN", (ix1 + 14, iy1 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (40, 50, 70), 2)
+        cv2.putText(frame, "ID: 048204001234", (ix1 + 74, iy1 + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (25, 25, 25), 1)
+        cv2.putText(frame, "NGUYEN VAN A", (ix1 + 74, iy1 + 76), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (35, 35, 35), 1)
+        cv2.putText(frame, "DOB: 15/08/2004", (ix1 + 74, iy1 + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (50, 50, 50), 1)
+
+        # 2. Thẻ Ngân Hàng giả lập (credit_card: tỷ lệ ~ 1.58, độ bão hòa màu cao)
+        cx1, cy1 = 38 + dx, 235 - dy
+        cx2, cy2 = cx1 + 215, cy1 + 135
+        cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (185, 95, 20), -1)
+        cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (240, 180, 70), 2)
+        cv2.rectangle(frame, (cx1 + 18, cy1 + 42), (cx1 + 52, cy1 + 68), (60, 215, 255), -1)
+        cv2.putText(frame, "BANK PLATINUM VISA", (cx1 + 16, cy1 + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 245, 220), 2)
+        cv2.putText(frame, "4532 8910 2345 6789", (cx1 + 16, cy1 + 94), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+        cv2.putText(frame, "VALID 08/29  CVV 889", (cx1 + 16, cy1 + 118), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 230, 210), 1)
+
+        # 3. Hóa đơn mua hàng giả lập (receipt: hẹp & cao, nền sáng)
+        rx1, ry1 = 445 - dx, 55 + dy
+        rx2, ry2 = rx1 + 145, ry1 + 265
+        cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (245, 245, 245), -1)
+        cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (110, 110, 110), 2)
+        cv2.putText(frame, "HOA DON THANH TOAN", (rx1 + 8, ry1 + 26), cv2.FONT_HERSHEY_SIMPLEX, 0.37, (20, 20, 20), 1)
+        for line_idx in range(7):
+            ly = ry1 + 52 + line_idx * 26
+            cv2.line(frame, (rx1 + 12, ly), (rx2 - 14, ly), (60, 60, 60), 2)
+        cv2.putText(frame, "TONG: 1.250.000 VND", (rx1 + 10, ry2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (10, 10, 10), 1)
+
+        # Thư mục lật ngược trước khi CameraWorker cv2.flip(frame, 1) để chữ xuôi chiều
+        frame = cv2.flip(frame, 1)
+        time.sleep(0.03)
+        return True, frame
+
+    def release(self):
+        self._opened = False
 
 
 class CameraWorker(QThread):
@@ -17,7 +94,7 @@ class CameraWorker(QThread):
     frame_ready = Signal(QImage, dict)
     enroll_result = Signal(bool, str)  # Signal báo kết quả đăng ký khuôn mặt mẫu (thành công, thông báo)
     camera_error = Signal(str)
-    
+
     def __init__(
         self,
         pipeline,
@@ -32,18 +109,24 @@ class CameraWorker(QThread):
         self.device_index = device_index
         self.selected_classes = selected_classes if selected_classes is not None else []
         self.running = True
-        
+
         # Các trạng thái điều khiển động từ giao diện
         self.safe_mode_active = True  # Bật/tắt che đối tượng nhạy cảm
         self.override_mask_mode = None  # Nếu None thì dùng theo Preset rủi ro, ngược lại force tất cả về 1 kiểu che
         self.enroll_pose_index = -1  # Chỉ số góc mặt đang yêu cầu quét (-1: rảnh, 0: thẳng, 1: trái, 2: phải)
         self.enroll_start_time = 0.0  # Thời điểm bắt đầu yêu cầu đăng ký mặt mẫu
         self.virtual_output = virtual_output
-        self.capture_factory = capture_factory or cv2.VideoCapture
+        self.capture_factory = capture_factory or self._default_capture_factory
         self.sleep_fn = sleep_fn or time.sleep
         self._capture = None
         self._config_lock = threading.Lock()
-        
+
+    @staticmethod
+    def _default_capture_factory(device_index):
+        if device_index == 2:
+            return DemoVideoCapture()
+        return cv2.VideoCapture(device_index)
+
     def request_pose_enrollment(self, pose_index):
         """Kích hoạt yêu cầu quét góc mặt mẫu cụ thể (0: nhìn thẳng, 1: nghiêng trái, 2: nghiêng phải)."""
         self.enroll_pose_index = pose_index
@@ -67,12 +150,12 @@ class CameraWorker(QThread):
                 self.override_mask_mode,
                 list(self.selected_classes),
             )
-        
+
     def run(self):
         safe_print(f"CameraWorker: opening camera index {self.device_index}")
         cap = self.capture_factory(self.device_index)
         self._capture = cap
-        
+
         # Thiết lập kích thước mặc định cho camera để tối ưu hóa CPU
         width = self.pipeline.config.get("camera.width", 640)
         height = self.pipeline.config.get("camera.height", 480)
@@ -96,7 +179,7 @@ class CameraWorker(QThread):
             except Exception as exc:
                 self.camera_error.emit(f"Không mở được virtual camera: {exc}")
                 self.virtual_output = None
-        
+
         if not cap.isOpened():
             safe_print(f"CameraWorker: cannot open camera index {self.device_index}")
             # Gửi tín hiệu báo lỗi về UI
@@ -105,7 +188,7 @@ class CameraWorker(QThread):
 
         consecutive_read_failures = 0
         last_frame_time = time.perf_counter()
-            
+
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -130,10 +213,10 @@ class CameraWorker(QThread):
                 self.sleep_fn(retry_delay)
                 continue
             consecutive_read_failures = 0
-            
+
             # 1. Lật gương hình ảnh ngang theo chiều tự nhiên (Mirror)
             frame = cv2.flip(frame, 1)
-            
+
             # Xử lý yêu cầu quét góc mặt mẫu (Multi-Pose Enrollment)
             if self.enroll_pose_index >= 0:
                 faces = self.pipeline.face_recognizer.detect_faces(frame)
@@ -141,7 +224,7 @@ class CameraWorker(QThread):
                     # Lấy khuôn mặt lớn nhất ở gần camera nhất
                     best_face = max(faces, key=lambda f: f["bbox"][2] * f["bbox"][3])
                     xmin, ymin, w, h = best_face["bbox"]
-                    
+
                     if w >= 100 and h >= 100:
                         # Xác định góc nghiêng mặt thực tế bằng landmark
                         detected_pose = self.pipeline.face_recognizer.estimate_head_pose(best_face["face_object"])
@@ -159,7 +242,7 @@ class CameraWorker(QThread):
                                 # Nếu đây là góc mặt cuối cùng (index 2), thực hiện lưu trữ xuống đĩa
                                 if self.enroll_pose_index == 2:
                                     self.pipeline.face_recognizer.save_registered_faces()
-                                
+
                                 idx = self.enroll_pose_index
                                 self.enroll_pose_index = -1  # Reset trạng thái quét
                                 self.enroll_result.emit(True, f"Đã quét thành công góc mặt {idx + 1}/3!")
@@ -174,16 +257,16 @@ class CameraWorker(QThread):
                     if time.time() - self.enroll_start_time > 4.0:
                         self.enroll_pose_index = -1
                         self.enroll_result.emit(False, "Đăng ký thất bại: Không tìm thấy khuôn mặt rõ ràng trong khung hình!")
-            
+
             # 2. Xử lý qua pipeline (thread-safe config read)
             safe_mode, override_mask, classes = self._get_config()
             if safe_mode:
                 # Truyền cấu hình override vào masker của pipeline trước khi xử lý
                 self.pipeline.masker.override_mask_mode = override_mask
-                
+
                 # Thực hiện suy luận và che các đối tượng nhạy cảm
                 processed_frame, metrics = self.pipeline.process_frame(
-                    frame, 
+                    frame,
                     selected_classes=classes
                 )
             else:
@@ -223,8 +306,6 @@ class CameraWorker(QThread):
 
     @staticmethod
     def _blank_frame(width, height):
-        import numpy as np
-
         return np.zeros((height, width, 3), dtype=np.uint8)
 
     def _emit_frame(self, processed_frame, metrics):

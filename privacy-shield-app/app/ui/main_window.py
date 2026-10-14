@@ -85,15 +85,25 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
         
         # ──────────────────────────────────────────────────────────
-        # SIDEBAR BÊN TRÁI
+        # SIDEBAR BÊN TRÁI (CÓ THANH CUỘN MƯỢT ĐỂ KHÔNG BỊ ÉP DẸT WIDGET)
         # ──────────────────────────────────────────────────────────
-        sidebar = QFrame(self)
-        sidebar.setObjectName("sidebar_container")
-        sidebar.setFixedWidth(280)
+        sidebar_outer = QFrame(self)
+        sidebar_outer.setObjectName("sidebar_container")
+        sidebar_outer.setFixedWidth(310)
+        sidebar_outer_layout = QVBoxLayout(sidebar_outer)
+        sidebar_outer_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_outer_layout.setSpacing(0)
+
+        sidebar_scroll = QScrollArea(sidebar_outer)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        sidebar = QWidget()
+        sidebar.setStyleSheet("background: transparent;")
         
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(20, 25, 20, 25)
-        sidebar_layout.setSpacing(15)
+        sidebar_layout.setContentsMargins(18, 20, 18, 20)
+        sidebar_layout.setSpacing(10)
         
         # Brand Header (App Title)
         brand_layout = QVBoxLayout()
@@ -135,10 +145,14 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(cam_label)
         
         self.camera_combo = QComboBox(self)
-        # Hỗ trợ nhanh 2 webcam index thông dụng
-        self.camera_combo.addItems(["Camera Index 0 (Mặc định)", "Camera Index 1 (Phụ)"])
+        # Hỗ trợ nhanh 2 webcam index thông dụng + Chế độ Demo Trực Quan
+        self.camera_combo.addItems([
+            "Camera Index 0 (Mặc định)",
+            "Camera Index 1 (Phụ)",
+            "🎬 Demo Trực Quan (Thẻ/CCCD/Hóa đơn)",
+        ])
         device_idx = self.config.get("camera.device_index", 0)
-        self.camera_combo.setCurrentIndex(0 if device_idx == 0 else 1)
+        self.camera_combo.setCurrentIndex(device_idx if device_idx in (0, 1, 2) else 0)
         self.camera_combo.currentIndexChanged.connect(self.on_camera_changed)
         sidebar_layout.addWidget(self.camera_combo)
         
@@ -348,8 +362,12 @@ class MainWindow(QMainWindow):
         ]
             
         scroll_layout.addStretch()
+        scroll.setMinimumHeight(195)
         scroll.setWidget(scroll_content)
         sidebar_layout.addWidget(scroll)
+        sidebar_layout.addStretch()
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_outer_layout.addWidget(sidebar_scroll)
         
         # ──────────────────────────────────────────────────────────
         # VÙNG HIỂN THỊ CHÍNH (BÊN PHẢI)
@@ -391,7 +409,7 @@ class MainWindow(QMainWindow):
         content_layout.addLayout(metrics_layout)
         
         # Lắp ghép chính
-        main_layout.addWidget(sidebar)
+        main_layout.addWidget(sidebar_outer)
         main_layout.addWidget(content_pane, 1)
         
         # ──────────────────────────────────────────────────────────
