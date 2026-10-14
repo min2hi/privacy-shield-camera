@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import time
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -8,11 +12,35 @@ from app.core.masking import Masker
 from app.core.temporal_smoothing import TemporalSmoothing, calculate_iou
 from app.utils.logging_config import get_logger
 
+if TYPE_CHECKING:
+    from app.utils.config_loader import ConfigLoader
+
 logger = get_logger(__name__)
 
 
 class PrivacyPipeline:
-    def __init__(self, config_loader, detector=None, face_recognizer=None):
+    config: ConfigLoader
+    detector: Any
+    face_rec_enabled: bool
+    face_threshold: float
+    face_recognizer: Any
+    mask_owner_face: bool
+    mask_strangers_face: bool
+    scheduler: FrameScheduler
+    smoothing: TemporalSmoothing
+    masker: Masker
+    fail_safe: bool
+    last_time: float
+    fps: float
+    last_face_tracks: list[dict[str, Any]]
+    _last_effective_classes: tuple[str, ...] | None
+
+    def __init__(
+        self,
+        config_loader: ConfigLoader,
+        detector: Any = None,
+        face_recognizer: Any = None,
+    ) -> None:
         self.config = config_loader
         
         # Đọc cấu hình
@@ -79,15 +107,21 @@ class PrivacyPipeline:
         self.last_time = time.perf_counter()
         self.fps = 0.0
         self.last_face_tracks = []
+        self._last_effective_classes = None
 
-    def reset_tracking(self):
+    def reset_tracking(self) -> None:
         """Reset state that must not cross camera/model/policy sessions."""
         self.scheduler.reset()
         self.smoothing.reset()
         self.last_face_tracks = []
 
     @staticmethod
-    def privacy_screen(frame, reason="SAFE MODE ACTIVE", *, fallback_size=(480, 640)):
+    def privacy_screen(
+        frame: np.ndarray | None,
+        reason: str = "SAFE MODE ACTIVE",
+        *,
+        fallback_size: tuple[int, int] = (480, 640),
+    ) -> np.ndarray:
         """Create a fail-closed frame without retaining any source pixels."""
         if frame is not None:
             h, w = frame.shape[:2]
@@ -114,7 +148,9 @@ class PrivacyPipeline:
         )
         return screen
 
-    def process_frame(self, frame, selected_classes=None):
+    def process_frame(
+        self, frame: np.ndarray, selected_classes: Sequence[str] | list[str] | None = None
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         """
         Xử lý chính trên mỗi frame webcam.
         Trả về: (processed_frame, metrics)

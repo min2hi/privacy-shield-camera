@@ -55,3 +55,35 @@ def test_non_finite_embedding_is_not_saved(tmp_path):
     ]
     assert not recognizer.save_registered_faces()
     assert not recognizer.registered_face_path.exists()
+
+
+def test_face_template_is_encrypted_at_rest(tmp_path):
+    recognizer = recognizer_without_runtime(tmp_path)
+    recognizer.registered_embeddings = [
+        np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    ]
+    assert recognizer.save_registered_faces()
+    raw = recognizer.registered_face_path.read_bytes()
+    # Encrypted Fernet token should not have plaintext numpy magic bytes
+    assert raw[:6] != b"\x93NUMPY"
+    loaded = recognizer.load_registered_face()
+    assert len(loaded) == 1
+    np.testing.assert_array_equal(loaded[0], [1.0, 2.0, 3.0, 4.0])
+
+
+def test_face_template_legacy_plaintext_backward_compatible(tmp_path):
+    recognizer = recognizer_without_runtime(tmp_path)
+    plain_array = np.array([[5.0, 6.0, 7.0, 8.0]], dtype=np.float32)
+    np.save(recognizer.registered_face_path, plain_array, allow_pickle=False)
+    # Verify file is plaintext .npy
+    assert recognizer.registered_face_path.read_bytes()[:6] == b"\x93NUMPY"
+    loaded = recognizer.load_registered_face()
+    assert len(loaded) == 1
+    np.testing.assert_array_equal(loaded[0], [5.0, 6.0, 7.0, 8.0])
+
+
+def test_face_template_invalid_encrypted_data(tmp_path):
+    recognizer = recognizer_without_runtime(tmp_path)
+    recognizer.registered_face_path.write_bytes(b"not_a_valid_fernet_token_or_numpy")
+    assert recognizer.load_registered_face() == []
+

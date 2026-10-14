@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+from types import TracebackType
+from typing import Any
+
 import cv2
+import numpy as np
 
 
 class VirtualCameraOutput:
-    def __init__(self, width, height, fps, backend=None):
+    width: int
+    height: int
+    fps: float
+    backend: Any
+    camera: Any
+
+    def __init__(
+        self,
+        width: int | float,
+        height: int | float,
+        fps: int | float,
+        backend: Any = None,
+    ) -> None:
         self.width = int(width)
         self.height = int(height)
         self.fps = float(fps)
         self.backend = backend
         self.camera = None
 
-    def open(self):
+    def open(self) -> None:
         if self.camera is not None:
             return
         if self.backend is None:
@@ -27,7 +43,7 @@ class VirtualCameraOutput:
             fmt=self.backend.PixelFormat.RGB,
         )
 
-    def send_bgr(self, processed_frame):
+    def send_bgr(self, processed_frame: np.ndarray) -> None:
         if self.camera is None:
             raise RuntimeError("Virtual camera is not open")
         if processed_frame.shape[:2] != (self.height, self.width):
@@ -36,14 +52,20 @@ class VirtualCameraOutput:
         self.camera.send(rgb_frame)
         self.camera.sleep_until_next_frame()
 
-    def close(self):
+    def close(self) -> None:
         if self.camera is not None:
             self.camera.close()
             self.camera = None
 
-    def __enter__(self):
+    def __enter__(self) -> VirtualCameraOutput:
         self.open()
         return self
 
-    def __exit__(self, exc_type, exc, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self.close()
+

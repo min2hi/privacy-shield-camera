@@ -1,4 +1,10 @@
-def calculate_iou(box1, box2):
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+
+def calculate_iou(box1: Sequence[float | int], box2: Sequence[float | int]) -> float:
     """
     Tính toán chỉ số Intersection over Union (IoU) giữa 2 bounding box.
     Định dạng box: (x1, y1, x2, y2)
@@ -28,7 +34,11 @@ def calculate_iou(box1, box2):
 
 
 class TemporalSmoothing:
-    def __init__(self, hold_frames=5, iou_threshold=0.3):
+    hold_frames: int
+    iou_threshold: float
+    active_boxes: list[dict[str, Any]]
+
+    def __init__(self, hold_frames: int = 5, iou_threshold: float = 0.3) -> None:
         """
         hold_frames: Số lượng frame giữ lại mask khi bị mất dấu (TTL).
         iou_threshold: Ngưỡng IoU tối thiểu để coi 2 bbox ở 2 frame liên tiếp là cùng 1 vật thể.
@@ -38,11 +48,11 @@ class TemporalSmoothing:
         # Mỗi active_box là một dict: { 'class_name': ..., 'bbox': (x1, y1, x2, y2), 'ttl': ..., 'confidence': ... }
         self.active_boxes = []
 
-    def reset(self):
+    def reset(self) -> None:
         """Drop all tracks at session boundaries."""
         self.active_boxes = []
 
-    def update(self, new_detections):
+    def update(self, new_detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         new_detections: Danh sách bbox phát hiện mới từ detector ở frame hiện tại:
                         [{'class_name': ..., 'bbox': (x1, y1, x2, y2), 'confidence': ...}]
@@ -52,7 +62,7 @@ class TemporalSmoothing:
         for box in self.active_boxes:
             box["ttl"] -= 1
 
-        matched_new_indices = set()
+        matched_new_indices: set[int] = set()
 
         # 2. So khớp các phát hiện mới với các box đang theo dõi
         for active_box in self.active_boxes:

@@ -294,14 +294,9 @@ class FaceRecognizer:
             return False
 
         self.registered_face_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.registered_face_path.with_name(
-            f".{self.registered_face_path.name}.tmp"
-        )
-        with temp_path.open("wb") as handle:
-            np.save(handle, payload, allow_pickle=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, self.registered_face_path)
+        from app.utils.crypto import save_encrypted_array
+        if not save_encrypted_array(payload, self.registered_face_path):
+            return False
 
         metadata = {
             "schema_version": 1,
@@ -323,7 +318,10 @@ class FaceRecognizer:
         """Tải danh sách vector nhúng các mẫu mặt của chủ sở hữu."""
         if self.registered_face_path.exists():
             try:
-                embeddings = np.load(str(self.registered_face_path), allow_pickle=False)
+                from app.utils.crypto import load_encrypted_array
+                embeddings = load_encrypted_array(self.registered_face_path)
+                if embeddings is None:
+                    return []
                 if embeddings.ndim == 1:
                     embeddings = embeddings.reshape(1, -1)
                 if (
