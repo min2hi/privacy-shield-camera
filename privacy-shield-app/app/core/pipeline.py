@@ -6,7 +6,9 @@ import numpy as np
 from app.core.frame_scheduler import FrameScheduler
 from app.core.masking import Masker
 from app.core.temporal_smoothing import TemporalSmoothing, calculate_iou
-from app.utils.console import safe_print
+from app.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class PrivacyPipeline:
@@ -256,7 +258,7 @@ class PrivacyPipeline:
             return processed_frame, metrics
 
         except Exception as e:
-            safe_print(f"PrivacyPipeline error: {e}")
+            logger.error("PrivacyPipeline error: %s", e, exc_info=True)
             
             # Cơ chế Fail-safe: Nếu bật, xuất màn hình đen kèm thông báo thay vì video thô
             if self.fail_safe:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from app.ui.main_window import MainWindow
 from app.utils.config_loader import ConfigLoader
+from app.utils.logging_config import setup_logging
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -66,6 +67,7 @@ def main() -> int:
     parser.add_argument("--quit-after-ms", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
+    setup_logging()
     app = QApplication(sys.argv)
     config = ConfigLoader(args.config)
     fixture_pipeline = FixturePipeline(config) if args.fixture else None
@@ -81,4 +83,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    setup_logging()
     raise SystemExit(main())
+

@@ -9,9 +9,12 @@ import time
 import cv2
 import numpy as np
 from app.core.virtual_camera import VirtualCameraOutput
-from app.utils.console import safe_print
+from app.utils.logging_config import get_logger
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
+
+logger = get_logger(__name__)
+
 
 
 class DemoVideoCapture:
@@ -132,7 +135,9 @@ class CameraWorker(QThread):
         self.enroll_pose_index = pose_index
         self.enroll_start_time = time.time()
 
-    def update_config(self, safe_mode=None, override_mask=None, selected_classes=None):
+    def update_config(self, safe_mode=None, override_mask=None, selected_classes=None,
+                      confidence=None, mask_owner_face=None, mask_strangers_face=None,
+                      virtual_camera_enabled=None):
         """Thread-safe: cập nhật cấu hình từ UI thread."""
         with self._config_lock:
             if safe_mode is not None:
@@ -141,18 +146,67 @@ class CameraWorker(QThread):
                 self.override_mask_mode = override_mask
             if selected_classes is not None:
                 self.selected_classes = list(selected_classes)
+            if confidence is not None:
+                self._pending_confidence = confidence
+            if mask_owner_face is not None:
+                self._pending_mask_owner = mask_owner_face
+            if mask_strangers_face is not None:
+                self._pending_mask_stranger = mask_strangers_face
+            if virtual_camera_enabled is not None:
+                self._pending_vcam = virtual_camera_enabled
 
     def _get_config(self):
         """Thread-safe: đọc cấu hình hiện tại trong worker thread."""
         with self._config_lock:
-            return (
+            config = (
                 self.safe_mode_active,
                 self.override_mask_mode,
                 list(self.selected_classes),
             )
+            # Apply pending pipeline config changes inside worker thread
+            pending_conf = getattr(self, '_pending_confidence', None)
+            pending_owner = getattr(self, '_pending_mask_owner', None)
+            pending_stranger = getattr(self, '_pending_mask_stranger', None)
+            pending_vcam = getattr(self, '_pending_vcam', None)
+            # Clear pending
+            self._pending_confidence = None
+            self._pending_mask_owner = None
+            self._pending_mask_stranger = None
+            self._pending_vcam = None
+        # Apply outside lock (pipeline mutations are now on worker thread)
+        if pending_conf is not None:
+            self.pipeline.detector.confidence = pending_conf
+        if pending_owner is not None:
+            self.pipeline.mask_owner_face = pending_owner
+        if pending_stranger is not None:
+            self.pipeline.mask_strangers_face = pending_stranger
+        if pending_vcam is not None:
+            self._apply_vcam_change(pending_vcam)
+        return config
+
+    def _apply_vcam_change(self, enabled):
+        """Bật/tắt virtual camera output trong worker thread."""
+        if enabled and self.virtual_output is None:
+            try:
+                width = self.pipeline.config.get("camera.width", 640)
+                height = self.pipeline.config.get("camera.height", 480)
+                fps = self.pipeline.config.get("camera.fps", 30)
+                self.virtual_output = VirtualCameraOutput(width, height, fps)
+                self.virtual_output.open()
+                logger.info("Virtual camera opened")
+            except Exception as exc:
+                self.camera_error.emit(f"Không mở được virtual camera: {exc}")
+                self.virtual_output = None
+        elif not enabled and self.virtual_output is not None:
+            try:
+                self.virtual_output.close()
+            except Exception:
+                pass
+            self.virtual_output = None
+            logger.info("Virtual camera closed")
 
     def run(self):
-        safe_print(f"CameraWorker: opening camera index {self.device_index}")
+        logger.info("Opening camera index %d", self.device_index)
         cap = self.capture_factory(self.device_index)
         self._capture = cap
 
@@ -181,7 +235,7 @@ class CameraWorker(QThread):
                 self.virtual_output = None
 
         if not cap.isOpened():
-            safe_print(f"CameraWorker: cannot open camera index {self.device_index}")
+            logger.error("Cannot open camera index %d", self.device_index)
             # Gửi tín hiệu báo lỗi về UI
             self.running = False
             self.camera_error.emit(f"Không mở được camera index {self.device_index}")
@@ -239,10 +293,6 @@ class CameraWorker(QThread):
                         else:
                             success = self.pipeline.face_recognizer.register_face_pose(frame, best_face["bbox"], self.enroll_pose_index)
                             if success:
-                                # Nếu đây là góc mặt cuối cùng (index 2), thực hiện lưu trữ xuống đĩa
-                                if self.enroll_pose_index == 2:
-                                    self.pipeline.face_recognizer.save_registered_faces()
-
                                 idx = self.enroll_pose_index
                                 self.enroll_pose_index = -1  # Reset trạng thái quét
                                 self.enroll_result.emit(True, f"Đã quét thành công góc mặt {idx + 1}/3!")
@@ -302,7 +352,7 @@ class CameraWorker(QThread):
         if self.virtual_output is not None:
             self.virtual_output.close()
         self.pipeline.reset_tracking()
-        safe_print("CameraWorker: capture and output resources released")
+        logger.info("Capture and output resources released")
 
     @staticmethod
     def _blank_frame(width, height):

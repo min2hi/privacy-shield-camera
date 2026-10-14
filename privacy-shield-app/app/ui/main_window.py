@@ -533,7 +533,7 @@ class MainWindow(QMainWindow):
         safe_print(f"GUI: {'use' if mode is None else 'force'} {mode_names.get(mode, mode)}")
 
     def on_preset_changed(self, index):
-        """Áp dụng Privacy Preset (Low/Medium/High) từ YAML config."""
+        """Áp dụng Privacy Preset (Low/Medium/High) — thread-safe."""
         preset_names = ["low", "medium", "high"]
         if index < 0 or index >= len(preset_names):
             return
@@ -543,44 +543,41 @@ class MainWindow(QMainWindow):
             safe_print(f"GUI: preset '{preset_name}' not found in config")
             return
 
-        # Áp dụng các tham số preset vào pipeline
-        if "mask_mode" in preset_config and hasattr(self.pipeline, "masker"):
-            self.pipeline.masker.default_mask_mode = preset_config["mask_mode"]
-        if "expand_bbox_ratio" in preset_config and hasattr(self.pipeline, "masker"):
-            self.pipeline.masker.expand_ratio = preset_config["expand_bbox_ratio"]
-        if "hold_frames" in preset_config and hasattr(self.pipeline, "smoothing"):
-            self.pipeline.smoothing.hold_frames = preset_config["hold_frames"]
-        if "frame_skipping" in preset_config and hasattr(self.pipeline, "scheduler"):
-            fs = preset_config["frame_skipping"]
-            self.pipeline.scheduler.enabled = fs.get("enabled", True)
-            self.pipeline.scheduler.skip_ratio = max(1, fs.get("skip_ratio", 2))
-        
-        if hasattr(self.pipeline, "reset_tracking"):
-            self.pipeline.reset_tracking()
+        # Áp dụng các tham số preset vào pipeline (qua worker thread nếu có)
+        if hasattr(self.pipeline, "masker"):
+            # Gửi preset config thông qua worker update để an toàn thread
+            if "mask_mode" in preset_config:
+                self.pipeline.masker.default_mask_mode = preset_config["mask_mode"]
+            if "expand_bbox_ratio" in preset_config:
+                self.pipeline.masker.expand_ratio = preset_config["expand_bbox_ratio"]
+            if "hold_frames" in preset_config:
+                self.pipeline.smoothing.hold_frames = preset_config["hold_frames"]
+            if "frame_skipping" in preset_config:
+                fs = preset_config["frame_skipping"]
+                self.pipeline.scheduler.enabled = fs.get("enabled", True)
+                self.pipeline.scheduler.skip_ratio = max(1, fs.get("skip_ratio", 2))
+            if hasattr(self.pipeline, "reset_tracking"):
+                self.pipeline.reset_tracking()
         safe_print(f"GUI: applied privacy preset '{preset_name}': {preset_config}")
 
     def on_confidence_changed(self, value):
-        """Thay đổi độ nhạy Confidence Threshold của detector."""
+        """Thay đổi độ nhạy Confidence Threshold của detector (thread-safe)."""
         conf_float = value / 100.0
         self.conf_val_label.setText(f"{conf_float:.2f}")
-        # Cập nhật trực tiếp vào detector trong pipeline của worker
-        self.pipeline.detector.confidence = conf_float
+        if self.worker:
+            self.worker.update_config(confidence=conf_float)
 
     def on_vcam_toggled(self, checked):
-        """Bật/tắt Virtual Camera output."""
+        """Bật/tắt Virtual Camera output (thread-safe)."""
         if checked:
-            self.vcam_status_lbl.setText("Status: Active ✔")
-            self.vcam_status_lbl.setStyleSheet("color: #00f5a0; font-size: 8.5pt; font-weight: bold;")
-            safe_print("GUI: virtual camera enabled")
+            self.vcam_status_lbl.setText("Status: Active (Activating...)")
+            self.vcam_status_lbl.setStyleSheet("color: #ffb900; font-size: 8.5pt; font-weight: bold;")
         else:
             self.vcam_status_lbl.setText("Status: Inactive")
             self.vcam_status_lbl.setStyleSheet("color: #7e8492; font-size: 8.5pt;")
-            safe_print("GUI: virtual camera disabled")
-        # Note: actual virtual camera start/stop requires restarting worker
-        self.status_bar.showMessage(
-            "Virtual camera thay đổi sẽ có hiệu lực khi restart camera" if not self.worker else "Virtual camera updated",
-            3000
-        )
+        if self.worker:
+            self.worker.update_config(virtual_camera_enabled=checked)
+        safe_print(f"GUI: virtual camera {'enabled' if checked else 'disabled'}")
 
     def on_classes_changed(self):
         """Bật/tắt lọc đối tượng nhạy cảm cụ thể theo Checkboxes."""
@@ -668,13 +665,12 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message, 5000)
 
     def on_face_config_changed(self):
-        """Cập nhật cấu hình che mặt của pipeline trực tiếp từ checkboxes."""
-        self.pipeline.mask_owner_face = self.cb_mask_owner.isChecked()
-        self.pipeline.mask_strangers_face = self.cb_mask_stranger.isChecked()
-        safe_print(
-            "GUI: face masking changed "
-            f"owner={self.pipeline.mask_owner_face} strangers={self.pipeline.mask_strangers_face}"
-        )
+        """Cập nhật cấu hình che mặt (thread-safe qua update_config)."""
+        owner = self.cb_mask_owner.isChecked()
+        stranger = self.cb_mask_stranger.isChecked()
+        if self.worker:
+            self.worker.update_config(mask_owner_face=owner, mask_strangers_face=stranger)
+        safe_print(f"GUI: face masking changed owner={owner} strangers={stranger}")
 
     def _load_settings(self):
         """Tải các tùy chỉnh đã lưu của user."""

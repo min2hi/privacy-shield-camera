@@ -241,6 +241,12 @@ class FaceEnrollmentDialog(QDialog):
         super().reject()
         
     def accept(self):
-        """Khôi phục trạng thái nhận diện bình thường của worker khi hoàn thành đăng ký."""
+        """Lưu embeddings xuống đĩa và khôi phục trạng thái bình thường khi user xác nhận."""
         self.worker.enroll_pose_index = -1
+        # Chỉ save khi user nhấn HOÀN THÀNH (không save sớm trong worker)
+        if hasattr(self.worker, 'pipeline') and hasattr(self.worker.pipeline, 'face_recognizer'):
+            saved = self.worker.pipeline.face_recognizer.save_registered_faces()
+            if saved:
+                from app.utils.console import safe_print
+                safe_print("EnrollDialog: face templates saved to disk on user confirmation")
         super().accept()

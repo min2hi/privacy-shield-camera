@@ -119,12 +119,15 @@ class Masker:
             # 1. Mở rộng bounding box
             expanded_box = expand_bbox(bbox, (h, w), self.expand_ratio)
 
-            # 2. Xác định phương pháp che (Ưu tiên: Override động từ GUI > Custom mask_mode trong bbox > Presets của Class)
-            mask_mode = (
-                self.override_mask_mode
-                if self.override_mask_mode
-                else (det.get("mask_mode") or self.class_mask_presets.get(class_name, self.default_mask_mode))
-            )
+            # 2. Xác định phương pháp che
+            # Face detections luôn giữ mask_mode riêng (gaussian_blur cho owner, mosaic cho stranger)
+            # Override chỉ áp dụng cho object detections (card, phone, etc.)
+            if det.get("class_name") == "face" and det.get("mask_mode"):
+                mask_mode = det["mask_mode"]
+            elif self.override_mask_mode:
+                mask_mode = self.override_mask_mode
+            else:
+                mask_mode = det.get("mask_mode") or self.class_mask_presets.get(class_name, self.default_mask_mode)
 
             # 3. Áp dụng hiệu ứng
             if mask_mode == "solid_mask":

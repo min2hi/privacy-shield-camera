@@ -76,8 +76,8 @@ class FaceRecognizer:
 
     # SHA256 checksums đã xác minh cho các phiên bản ONNX model cụ thể
     _MODEL_CHECKSUMS = {
-        "face_detection_yunet.onnx": None,  # None = skip check (first download), sẽ cập nhật sau khi verify thủ công
-        "mobilefacenet.onnx": None,
+        "face_detection_yunet.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+        "mobilefacenet.onnx": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
     }
 
     def _ensure_models_exist(self):
