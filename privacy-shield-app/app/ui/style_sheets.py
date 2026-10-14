@@ -1,386 +1,396 @@
 """
-style_sheets.py — Bộ định nghĩa CSS/QSS cho Privacy Shield Desktop App.
-Kế thừa cấu trúc chuyên nghiệp từ PyDracula và bảng màu Mint Green.
+style_sheets.py — Hệ thống Design Tokens & QSS chuẩn Studio Dark (Linear / Camo Studio style).
+Sử dụng bảng màu Obsidian Zinc, viền mảnh 1px tinh tế và điểm nhấn Emerald trầm chuẩn phần mềm chuyên nghiệp.
 """
 
 # ============================================================
-# THEME TOKENS — Centralized design constants
+# STUDIO DESIGN TOKENS — Refined Dark Palette
 # ============================================================
-MINT_PRIMARY = "#00f5a0"
-MINT_HOVER = "#00d48a"
-MINT_PRESSED = "#00b375"
-DANGER_PRIMARY = "#ff4a6b"
-DANGER_HOVER = "rgba(255, 74, 107, 0.15)"
-WARNING_PRIMARY = "#ffb900"
-BG_DARK = "#111215"
-BG_SIDEBAR = "#16171b"
-BG_CARD = "rgba(22, 23, 27, 0.75)"
-TEXT_PRIMARY = "#f0f2f5"
-TEXT_SECONDARY = "#eef1f5"
-TEXT_MUTED = "#7e8492"
-BORDER_SUBTLE = "rgba(255, 255, 255, 0.06)"
-BORDER_HOVER = "rgba(255, 255, 255, 0.20)"
+MINT_PRIMARY = "#10b981"       # Studio Emerald (dịu mắt, chuyên nghiệp)
+MINT_BRIGHT = "#34d399"        # Emerald sáng cho số liệu nổi bật
+MINT_HOVER = "#059669"
+MINT_PRESSED = "#047857"
+MINT_SUBTLE = "rgba(16, 185, 129, 0.12)"
+MINT_BORDER = "rgba(16, 185, 129, 0.35)"
+
+DANGER_PRIMARY = "#f43f5e"     # Studio Rose/Crimson
+DANGER_HOVER = "rgba(244, 63, 94, 0.14)"
+WARNING_PRIMARY = "#f59e0b"    # Studio Amber
+
+BG_DARK = "#0b0d10"            # Nền tổng thể Obsidian sâu
+BG_VIEWPORT = "#07080a"        # Nền khung ngắm camera chuẩn broadcast
+BG_SIDEBAR = "#101318"         # Nền thanh bên
+BG_CARD = "#151920"            # Nền thẻ nhóm điều khiển (Tactile Card)
+BG_CONTROL = "#1a1f28"         # Nền input / combobox / button
+
+TEXT_PRIMARY = "#f3f4f6"       # Trắng dịu (Gray 100)
+TEXT_SECONDARY = "#d1d5db"     # Xám sáng (Gray 300)
+TEXT_MUTED = "#717a8a"         # Xám ghi kỹ thuật (Slate Muted)
+
+BORDER_SUBTLE = "#212732"      # Viền mảnh 1px chuẩn Linear
+BORDER_HOVER = "#333c4d"       # Viền khi di chuột
 
 
 APP_STYLE = """
-/* Thiết lập font chữ mặc định cho toàn bộ ứng dụng */
+/* ─── Base Typography & Surface ─── */
 QWidget {
-    color: #f0f2f5;
-    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-    font-size: 10pt;
+    color: #f3f4f6;
+    font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+    font-size: 9.5pt;
 }
 
-/* Khung cửa sổ chính */
 QMainWindow {
-    background-color: #111215;
+    background-color: #0b0d10;
 }
 
-/* Card Container dạng kính mờ (Glassmorphism) */
-QFrame#card_container {
-    background-color: rgba(22, 23, 27, 0.75);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
-}
-
-/* Sidebar Container */
+/* ─── Sidebar & Tactile Group Cards ─── */
 QFrame#sidebar_container {
-    background-color: #16171b;
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: #101318;
+    border-right: 1px solid #1e232d;
 }
 
-/* Tooltip (Dracula-style với viền Mint phát sáng) */
+QWidget#sidebar_content {
+    background-color: transparent;
+}
+
+QFrame#section_card, QFrame#vcam_control_card, QFrame#face_control_card {
+    background-color: #14181f;
+    border: 1px solid #202632;
+    border-radius: 8px;
+}
+
+QFrame#card_container {
+    background-color: #12151b;
+    border: 1px solid #1f2530;
+    border-radius: 10px;
+}
+
+QFrame#viewport_container {
+    background-color: #07080a;
+    border: 1px solid #1f2530;
+    border-radius: 10px;
+}
+
+QFrame#monitor_header_bar {
+    background-color: #12151b;
+    border: 1px solid #1f2530;
+    border-radius: 8px;
+}
+
+/* ─── Tooltip ─── */
 QToolTip {
-    color: #ffffff;
-    background-color: rgba(33, 37, 43, 220);
-    border: none;
-    border-left: 3px solid #00f5a0;
-    text-align: left;
+    color: #f3f4f6;
+    background-color: #181c24;
+    border: 1px solid #2c3444;
     padding: 6px 10px;
-    border-radius: 4px;
+    border-radius: 5px;
+    font-size: 8.5pt;
 }
 
-/* Tiêu đề ứng dụng */
+/* ─── Typography Labels ─── */
+QLabel {
+    color: #e5e7eb;
+    background: transparent;
+}
+
 QLabel#app_title {
-    font-size: 16pt;
-    font-weight: bold;
-    color: #00f5a0;
+    font-size: 12.5pt;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #f9fafb;
     background: transparent;
 }
 
 QLabel#app_subtitle {
-    font-size: 8.5pt;
-    color: #7e8492;
+    font-size: 8pt;
+    color: #6b7280;
     background: transparent;
 }
 
-/* Nhãn thông số (Labels) */
-QLabel {
-    color: #eef1f5;
+QLabel#engine_badge {
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 7.5pt;
+    font-weight: 600;
+    color: #9ca3af;
+    background-color: #1a1f28;
+    border: 1px solid #262d3b;
+    border-radius: 4px;
+    padding: 2px 6px;
 }
 
 QLabel#section_header {
-    font-size: 11pt;
-    font-weight: bold;
-    color: #7e8492;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    padding-bottom: 4px;
-    margin-top: 10px;
-    margin-bottom: 5px;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 1.1px;
+    color: #6b7280;
+    padding-top: 6px;
+    padding-bottom: 2px;
+    background: transparent;
 }
 
-/* Nút bấm phẳng hiện đại (Modern Flat Button) */
+QLabel#field_label {
+    font-size: 9pt;
+    color: #9ca3af;
+    background: transparent;
+}
+
+QLabel#mono_pill {
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 8.5pt;
+    font-weight: 600;
+    color: #34d399;
+    background-color: rgba(16, 185, 129, 0.10);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: 4px;
+    padding: 1px 7px;
+}
+
+/* ─── Buttons ─── */
 QPushButton {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    color: #eef1f5;
-    padding: 10px 16px;
-    font-size: 9.5pt;
-    font-weight: bold;
+    background-color: #1a1f28;
+    border: 1px solid #28303e;
+    border-radius: 6px;
+    color: #e5e7eb;
+    padding: 7px 12px;
+    font-size: 9pt;
+    font-weight: 600;
 }
 
 QPushButton:hover {
-    background-color: rgba(0, 245, 160, 0.10);
-    border: 1px solid #00f5a0;
-    color: #00f5a0;
+    background-color: #222834;
+    border: 1px solid #384357;
+    color: #ffffff;
 }
 
 QPushButton:pressed {
-    background-color: rgba(0, 245, 160, 0.20);
-    border: 1px solid #00f5a0;
+    background-color: #151921;
+    border: 1px solid #10b981;
 }
 
-/* Nút bấm Cảnh báo (Danger Button) */
+QPushButton#primary_button {
+    background-color: #10b981;
+    border: 1px solid #059669;
+    color: #06110c;
+    font-weight: 700;
+}
+
+QPushButton#primary_button:hover {
+    background-color: #34d399;
+    border: 1px solid #10b981;
+    color: #040d09;
+}
+
+QPushButton#primary_button:pressed {
+    background-color: #059669;
+}
+
 QPushButton#danger_button {
-    background-color: rgba(255, 74, 107, 0.05);
-    border: 1px solid rgba(255, 74, 107, 0.15);
-    color: #ff4a6b;
+    background-color: rgba(244, 63, 94, 0.08);
+    border: 1px solid rgba(244, 63, 94, 0.25);
+    color: #fb7185;
 }
 
 QPushButton#danger_button:hover {
-    background-color: rgba(255, 74, 107, 0.15);
-    border: 1px solid #ff4a6b;
-    color: #ff4a6b;
+    background-color: rgba(244, 63, 94, 0.16);
+    border: 1px solid #f43f5e;
+    color: #fda4af;
 }
 
 QPushButton#danger_button:pressed {
-    background-color: rgba(255, 74, 107, 0.25);
+    background-color: rgba(244, 63, 94, 0.24);
 }
 
-/* Dropdown (ComboBox) */
+QPushButton:disabled {
+    background-color: #13161c;
+    color: #4b5563;
+    border: 1px solid #1c212b;
+}
+
+/* ─── ComboBox ─── */
 QComboBox {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: #eef1f5;
-    min-width: 150px;
+    background-color: #1a1f28;
+    border: 1px solid #262d3b;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #f3f4f6;
+    font-size: 9pt;
+    min-height: 18px;
 }
 
 QComboBox:hover {
-    border: 1px solid rgba(255, 255, 255, 0.20);
-    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid #384357;
+    background-color: #1e242f;
+}
+
+QComboBox:focus {
+    border: 1px solid #10b981;
 }
 
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 25px; 
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    border-top-right-radius: 8px;
-    border-bottom-right-radius: 8px;
+    width: 24px;
+    border-left: 1px solid #262d3b;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
 }
 
 QComboBox::down-arrow {
     image: none;
     width: 0;
     height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #7e8492;
-    margin-right: 6px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #9ca3af;
+    margin-right: 4px;
 }
 
 QComboBox::down-arrow:hover {
-    border-top: 6px solid #00f5a0;
+    border-top: 5px solid #f3f4f6;
 }
 
 QComboBox QAbstractItemView {
-    background-color: #16171b;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 8px;
-    selection-background-color: rgba(0, 245, 160, 0.15);
-    selection-color: #00f5a0;
-    color: #eef1f5;
-    padding: 6px;
+    background-color: #161a22;
+    border: 1px solid #2b3343;
+    border-radius: 6px;
+    selection-background-color: rgba(16, 185, 129, 0.16);
+    selection-color: #34d399;
+    color: #e5e7eb;
+    padding: 4px;
     outline: 0px;
 }
 
-/* Slider trượt ngang (Horizontal Slider) */
+/* ─── Horizontal Slider ─── */
 QSlider {
     background: transparent;
-    height: 24px;
+    height: 22px;
 }
 
 QSlider::groove:horizontal {
-    height: 6px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 3px;
+    height: 4px;
+    background: #252c3a;
+    border-radius: 2px;
 }
 
 QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00f5a0, stop:1 #00d48a);
-    border-radius: 3px;
+    background: #10b981;
+    border-radius: 2px;
 }
 
 QSlider::handle:horizontal {
-    background: #ffffff;
-    border: 2px solid #00f5a0;
-    width: 16px;
-    height: 16px;
-    margin: -5px 0px; /* Căn giữa tay kéo trên rãnh */
-    border-radius: 8px;
+    background: #f9fafb;
+    border: 2px solid #10b981;
+    width: 12px;
+    height: 12px;
+    margin: -5px 0px;
+    border-radius: 7px;
 }
 
 QSlider::handle:horizontal:hover {
-    background: #00f5a0;
-    border: 2px solid #ffffff;
-    width: 18px;
-    height: 18px;
-    margin: -6px 0px;
-    border-radius: 9px;
+    background: #ffffff;
+    border: 2px solid #34d399;
 }
 
-/* CheckBox индикатор (Bộ lọc đối tượng) */
+/* ─── CheckBox ─── */
 QCheckBox {
     spacing: 8px;
-    color: #eef1f5;
+    color: #d1d5db;
+    font-size: 9pt;
     background: transparent;
+    padding: 2px 0px;
+}
+
+QCheckBox:hover {
+    color: #ffffff;
 }
 
 QCheckBox::indicator {
-    border: 2px solid rgba(255, 255, 255, 0.15);
-    width: 16px;
-    height: 16px;
+    border: 1px solid #364052;
+    width: 15px;
+    height: 15px;
     border-radius: 4px;
-    background-color: rgba(255, 255, 255, 0.03);
+    background-color: #181c24;
 }
 
 QCheckBox::indicator:hover {
-    border: 2px solid #00f5a0;
-    background-color: rgba(0, 245, 160, 0.05);
+    border: 1px solid #10b981;
+    background-color: rgba(16, 185, 129, 0.08);
 }
 
 QCheckBox::indicator:checked {
-    border: 2px solid #00f5a0;
-    background-color: #00f5a0;
-    image: none;
+    border: 1px solid #10b981;
+    background-color: #10b981;
 }
 
 QCheckBox::indicator:checked:hover {
-    background-color: #00d48a;
-    border: 2px solid #00d48a;
+    background-color: #059669;
+    border: 1px solid #34d399;
 }
 
-/* Disabled states */
 QCheckBox:disabled {
-    color: rgba(255, 255, 255, 0.3);
+    color: #4b5563;
 }
 
 QCheckBox::indicator:disabled {
-    border: 2px solid rgba(255, 255, 255, 0.08);
-    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid #222733;
+    background-color: #13161c;
 }
 
-QComboBox:disabled {
-    background-color: rgba(255, 255, 255, 0.02);
-    color: rgba(255, 255, 255, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-QSlider:disabled::groove:horizontal {
-    background: rgba(255, 255, 255, 0.04);
-}
-
-QSlider:disabled::sub-page:horizontal {
-    background: rgba(255, 255, 255, 0.08);
-}
-
-QSlider:disabled::handle:horizontal {
-    background: rgba(255, 255, 255, 0.15);
-    border: 2px solid rgba(255, 255, 255, 0.1);
-}
-
-QPushButton:disabled {
-    background-color: rgba(255, 255, 255, 0.02);
-    color: rgba(255, 255, 255, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-/* Thanh cuộn dọc (Scrollbar) của PyDracula */
+/* ─── ScrollBar ─── */
 QScrollBar:vertical {
     border: none;
-    background: rgba(22, 23, 27, 0.3);
-    width: 8px;
-    margin: 0px;
-    border-radius: 4px;
+    background: transparent;
+    width: 6px;
+    margin: 2px 0px;
 }
 
-QScrollBar::handle:vertical {	
-    background: rgba(255, 255, 255, 0.12);
-    min-height: 25px;
-    border-radius: 4px;
+QScrollBar::handle:vertical {
+    background: #28303e;
+    min-height: 28px;
+    border-radius: 3px;
 }
 
-QScrollBar::handle:vertical:hover {	
-    background: #00f5a0;
+QScrollBar::handle:vertical:hover {
+    background: #3b465c;
 }
 
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     border: none;
     background: none;
 }
 
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-    background: none;
-}
-
-/* Scroll Area */
 QScrollArea {
     border: none;
     background-color: transparent;
 }
 
-/* Status Bar */
+/* ─── Status Bar ─── */
 QStatusBar {
-    background-color: #16171b;
-    color: #7e8492;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: #0e1015;
+    color: #6b7280;
+    border-top: 1px solid #1c212b;
+    font-family: "Cascadia Mono", "Consolas", "Segoe UI", monospace;
+    font-size: 8.5pt;
+    padding: 2px 8px;
 }
 
 QStatusBar::item {
     border: none;
 }
 
-/* Input fields */
-QLineEdit {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: #eef1f5;
-    selection-background-color: rgba(0, 245, 160, 0.3);
-    selection-color: #ffffff;
-}
-
-QLineEdit:focus {
-    border: 1px solid #00f5a0;
-}
-
-/* Progress Bar */
-QProgressBar {
-    background-color: rgba(255, 255, 255, 0.06);
-    border: none;
-    border-radius: 4px;
-    height: 6px;
-    text-align: center;
-    color: transparent;
-}
-
-QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00f5a0, stop:1 #00d48a);
-    border-radius: 4px;
-}
-
-/* Dialog boxes */
-QDialog {
-    background-color: #111215;
-}
-
-QMessageBox {
-    background-color: #111215;
+/* ─── Dialogs & MessageBox ─── */
+QDialog, QMessageBox {
+    background-color: #101318;
 }
 
 QMessageBox QLabel {
-    color: #eef1f5;
-    font-size: 10pt;
+    color: #e5e7eb;
+    font-size: 9.5pt;
 }
 
 QMessageBox QPushButton {
-    min-width: 80px;
-    padding: 8px 20px;
-}
-
-/* SpinBox */
-QSpinBox, QDoubleSpinBox {
-    background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    padding: 6px 10px;
-    color: #eef1f5;
-}
-
-QSpinBox:focus, QDoubleSpinBox:focus {
-    border: 1px solid #00f5a0;
+    min-width: 84px;
+    padding: 6px 16px;
 }
 """
