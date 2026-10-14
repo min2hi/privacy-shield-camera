@@ -22,10 +22,41 @@ class FixturePipeline:
             confidence=config.get("model.confidence", 0.25),
             supported_class_names=supported,
         )
-        self.face_recognizer = SimpleNamespace(registered_embeddings=[])
-        self.masker = SimpleNamespace(override_mask_mode=None)
+        self.face_recognizer = SimpleNamespace(
+            registered_embeddings=[],
+            detect_faces=lambda frame: [],
+            extract_embedding=lambda face_img: None,
+            estimate_head_pose=lambda face_obj: 0,
+            register_face_pose=lambda frame, bbox, idx: False,
+            save_registered_faces=lambda: False,
+            delete_registered_faces=lambda: False,
+            load_registered_face=lambda: [],
+        )
+        self.masker = SimpleNamespace(
+            override_mask_mode=None,
+            default_mask_mode="mosaic",
+            expand_ratio=0.15,
+        )
+        self.scheduler = SimpleNamespace(
+            enabled=True,
+            skip_ratio=2,
+            reset=lambda: None,
+        )
+        self.smoothing = SimpleNamespace(
+            hold_frames=5,
+            reset=lambda: None,
+        )
         self.mask_owner_face = config.get("face_recognition.mask_owner", True)
         self.mask_strangers_face = config.get("face_recognition.mask_stranger", False)
+
+    def reset_tracking(self):
+        pass
+
+    @staticmethod
+    def privacy_screen(frame, reason="SAFE MODE ACTIVE", *, fallback_size=(480, 640)):
+        import numpy as np
+        h, w = frame.shape[:2] if frame is not None else fallback_size
+        return np.zeros((h, w, 3), dtype=np.uint8)
 
 
 def main() -> int:

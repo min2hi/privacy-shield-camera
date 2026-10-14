@@ -5,6 +5,9 @@ def clip_bbox(bbox, frame_shape):
     """Normalize and clip an xyxy box to a frame, returning an empty box if invalid."""
     h, w = frame_shape[:2]
     x1, y1, x2, y2 = (int(value) for value in bbox)
+    # Fix: đảm bảo thứ tự tọa độ đúng trước khi clip
+    x1, x2 = min(x1, x2), max(x1, x2)
+    y1, y2 = min(y1, y2), max(y1, y2)
     x1 = min(max(0, x1), w)
     x2 = min(max(0, x2), w)
     y1 = min(max(0, y1), h)
@@ -66,7 +69,7 @@ def apply_gaussian_blur(frame, bbox, kernel_size=51):
     frame[y1:y2, x1:x2] = blurred
 
 
-def apply_mosaic(frame, bbox, block_size=10):
+def apply_mosaic(frame, bbox, block_size=None):
     """
     Tạo hiệu ứng điểm ảnh ô vuông (Mosaic) trên vùng bbox.
     """
@@ -77,6 +80,9 @@ def apply_mosaic(frame, bbox, block_size=10):
     roi = frame[y1:y2, x1:x2]
     roi_h, roi_w = roi.shape[:2]
 
+    # Scale block_size tự động theo kích thước ROI nếu không được chỉ định
+    if block_size is None:
+        block_size = max(12, int(min(roi_w, roi_h) * 0.15))
     # Tránh lỗi chia cho 0 nếu roi quá nhỏ
     block_w = max(1, roi_w // block_size)
     block_h = max(1, roi_h // block_size)
@@ -114,7 +120,11 @@ class Masker:
             expanded_box = expand_bbox(bbox, (h, w), self.expand_ratio)
 
             # 2. Xác định phương pháp che (Ưu tiên: Override động từ GUI > Custom mask_mode trong bbox > Presets của Class)
-            mask_mode = self.override_mask_mode if self.override_mask_mode else det.get("mask_mode", self.class_mask_presets.get(class_name, self.default_mask_mode))
+            mask_mode = (
+                self.override_mask_mode
+                if self.override_mask_mode
+                else (det.get("mask_mode") or self.class_mask_presets.get(class_name, self.default_mask_mode))
+            )
 
             # 3. Áp dụng hiệu ứng
             if mask_mode == "solid_mask":

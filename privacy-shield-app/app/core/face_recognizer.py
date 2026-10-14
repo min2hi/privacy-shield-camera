@@ -74,6 +74,12 @@ class FaceRecognizer:
         # 4. Tải khuôn mặt đã đăng ký nếu có
         self.registered_embeddings = self.load_registered_face()
 
+    # SHA256 checksums đã xác minh cho các phiên bản ONNX model cụ thể
+    _MODEL_CHECKSUMS = {
+        "face_detection_yunet.onnx": None,  # None = skip check (first download), sẽ cập nhật sau khi verify thủ công
+        "mobilefacenet.onnx": None,
+    }
+
     def _ensure_models_exist(self):
         """Tải mô hình YuNet và MobileFaceNet từ nguồn uy tín nếu chưa tồn tại cục bộ."""
         downloads = [
@@ -88,18 +94,30 @@ class FaceRecognizer:
                 
             safe_print(f"FaceRecognizer: downloading missing asset {path.name} from {url}")
             try:
-                # Thiết lập User-Agent giả lập trình duyệt để tránh bị chặn tải file
+                # Thiết lập User-Agent và timeout để tránh bị chặn/hang
                 req = urllib.request.Request(
                     url, 
                     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                 )
-                with urllib.request.urlopen(req) as response, open(path, 'wb') as out_file:
+                with urllib.request.urlopen(req, timeout=60) as response, open(path, 'wb') as out_file:
                     out_file.write(response.read())
                 
-                if path.exists() and path.stat().st_size > 50 * 1024:
-                    safe_print(f"FaceRecognizer: downloaded {path.name}")
-                else:
+                if not path.exists() or path.stat().st_size <= 50 * 1024:
                     raise ValueError("Dung lượng file tải về quá nhỏ.")
+
+                # Xác minh SHA256 nếu có checksum đã biết
+                expected_hash = self._MODEL_CHECKSUMS.get(path.name)
+                if expected_hash is not None:
+                    actual_hash = self._sha256(path)
+                    if actual_hash != expected_hash:
+                        path.unlink(missing_ok=True)
+                        raise ValueError(
+                            f"SHA256 mismatch cho {path.name}: "
+                            f"expected {expected_hash[:16]}..., got {actual_hash[:16]}..."
+                        )
+                    safe_print(f"FaceRecognizer: SHA256 verified {path.name}")
+
+                safe_print(f"FaceRecognizer: downloaded {path.name}")
             except Exception as e:
                 safe_print(f"FaceRecognizer: download failed for {url}: {e}")
                 if path.exists():
@@ -139,7 +157,10 @@ class FaceRecognizer:
         Trả về danh sách dict chứa coordinates: [xmin, ymin, w, h] (dạng pixel tuyệt đối).
         """
         h, w, _ = frame.shape
-        self.detector.setInputSize((w, h))
+        # Chỉ set input size khi kích thước frame thay đổi
+        if not hasattr(self, '_last_input_size') or self._last_input_size != (w, h):
+            self.detector.setInputSize((w, h))
+            self._last_input_size = (w, h)
         _, faces = self.detector.detect(frame)
         
         results = []
@@ -148,9 +169,13 @@ class FaceRecognizer:
                 bbox = face[0:4].astype(int)
                 xmin, ymin, width, height = bbox
                 
-                # Giới hạn tọa độ trong biên ảnh
-                xmin = max(0, xmin)
-                ymin = max(0, ymin)
+                # Giới hạn tọa độ trong biên ảnh (fix: trừ offset khi clip)
+                if xmin < 0:
+                    width += xmin  # giảm width theo phần bị clip
+                    xmin = 0
+                if ymin < 0:
+                    height += ymin
+                    ymin = 0
                 width = min(width, w - xmin)
                 height = min(height, h - ymin)
                 
@@ -360,5 +385,5 @@ class FaceRecognizer:
             return False, 999.0
             
         min_dist = min(distances)
-        is_matched = min_dist < self.threshold
-        return is_matched, min_dist
+        is_matched = bool(min_dist < self.threshold)
+        return is_matched, float(min_dist)

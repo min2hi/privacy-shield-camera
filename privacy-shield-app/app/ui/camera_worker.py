@@ -2,6 +2,7 @@
 camera_worker.py — Luồng chạy camera nền (QThread) cho Privacy Shield App.
 """
 
+import threading
 import time
 
 import cv2
@@ -41,11 +42,31 @@ class CameraWorker(QThread):
         self.capture_factory = capture_factory or cv2.VideoCapture
         self.sleep_fn = sleep_fn or time.sleep
         self._capture = None
+        self._config_lock = threading.Lock()
         
     def request_pose_enrollment(self, pose_index):
         """Kích hoạt yêu cầu quét góc mặt mẫu cụ thể (0: nhìn thẳng, 1: nghiêng trái, 2: nghiêng phải)."""
         self.enroll_pose_index = pose_index
         self.enroll_start_time = time.time()
+
+    def update_config(self, safe_mode=None, override_mask=None, selected_classes=None):
+        """Thread-safe: cập nhật cấu hình từ UI thread."""
+        with self._config_lock:
+            if safe_mode is not None:
+                self.safe_mode_active = safe_mode
+            if override_mask is not None:
+                self.override_mask_mode = override_mask
+            if selected_classes is not None:
+                self.selected_classes = list(selected_classes)
+
+    def _get_config(self):
+        """Thread-safe: đọc cấu hình hiện tại trong worker thread."""
+        with self._config_lock:
+            return (
+                self.safe_mode_active,
+                self.override_mask_mode,
+                list(self.selected_classes),
+            )
         
     def run(self):
         safe_print(f"CameraWorker: opening camera index {self.device_index}")
@@ -154,15 +175,16 @@ class CameraWorker(QThread):
                         self.enroll_pose_index = -1
                         self.enroll_result.emit(False, "Đăng ký thất bại: Không tìm thấy khuôn mặt rõ ràng trong khung hình!")
             
-            # 2. Xử lý qua pipeline
-            if self.safe_mode_active:
+            # 2. Xử lý qua pipeline (thread-safe config read)
+            safe_mode, override_mask, classes = self._get_config()
+            if safe_mode:
                 # Truyền cấu hình override vào masker của pipeline trước khi xử lý
-                self.pipeline.masker.override_mask_mode = self.override_mask_mode
+                self.pipeline.masker.override_mask_mode = override_mask
                 
                 # Thực hiện suy luận và che các đối tượng nhạy cảm
                 processed_frame, metrics = self.pipeline.process_frame(
                     frame, 
-                    selected_classes=self.selected_classes
+                    selected_classes=classes
                 )
             else:
                 # Paused remains fail-closed: never expose raw pixels.
@@ -214,10 +236,7 @@ class CameraWorker(QThread):
         self.frame_ready.emit(q_img, metrics)
 
     def stop(self):
-        """Dừng luồng an toàn."""
+        """Dừng luồng an toàn — chỉ set flag, để run() tự release hardware."""
         self.running = False
-        capture = self._capture
-        if capture is not None:
-            capture.release()
-        if self.isRunning() and not self.wait(3000):
+        if self.isRunning() and not self.wait(5000):
             self.camera_error.emit("Camera worker không dừng trong thời gian cho phép")

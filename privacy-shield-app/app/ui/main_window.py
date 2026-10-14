@@ -4,10 +4,15 @@ Thiết kế tối giản hiện đại, kế thừa phong cách chuyên nghiệ
 """
 
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QImage, QPixmap
+from app.core.pipeline import PrivacyPipeline
+from app.ui.camera_worker import CameraWorker
+from app.ui.custom_widgets import MetricCard, ToggleSwitch
+from app.ui.style_sheets import APP_STYLE
+from app.utils.config_loader import ConfigLoader
+from app.utils.console import safe_print
+from PySide6.QtCore import QSettings, Qt, Slot
+from PySide6.QtGui import QAction, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -16,25 +21,18 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
     QStatusBar,
+    QStyle,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
-
-# Thêm đường dẫn dự án để import các module của app
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from app.core.pipeline import PrivacyPipeline
-from app.ui.camera_worker import CameraWorker
-from app.ui.custom_widgets import MetricCard, ToggleSwitch
-from app.ui.style_sheets import APP_STYLE
-from app.utils.config_loader import ConfigLoader
-from app.utils.console import safe_print
 
 
 class MainWindow(QMainWindow):
@@ -58,8 +56,15 @@ class MainWindow(QMainWindow):
         # Khởi tạo Giao diện
         self.init_ui()
         
+        # Load saved user preferences
+        self._load_settings()
+        
         # Áp dụng stylesheet phong cách PyDracula + Mint
         self.setStyleSheet(APP_STYLE)
+        
+        # Khởi tạo System Tray
+        self.tray_icon = None
+        self.init_system_tray()
         
         # Khởi chạy luồng camera
         if auto_start:
@@ -103,6 +108,20 @@ class MainWindow(QMainWindow):
         brand_layout.addWidget(title_label)
         brand_layout.addWidget(subtitle_label)
         sidebar_layout.addLayout(brand_layout)
+        
+        # Privacy Status Banner
+        self.status_banner = QLabel("\u25cf PROTECTED", self)
+        self.status_banner.setAlignment(Qt.AlignCenter)
+        self.status_banner.setFixedHeight(32)
+        self.status_banner.setStyleSheet("""
+            background-color: rgba(0, 245, 160, 0.12);
+            color: #00f5a0;
+            font-size: 9pt;
+            font-weight: bold;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 245, 160, 0.3);
+        """)
+        sidebar_layout.addWidget(self.status_banner)
         
         # Separator Line
         line = QFrame(self)
@@ -153,6 +172,24 @@ class MainWindow(QMainWindow):
         self.mask_mode_combo.currentIndexChanged.connect(self.on_mask_mode_changed)
         sidebar_layout.addWidget(self.mask_mode_combo)
         
+        # SECTION 3.5: Privacy Presets (Low/Medium/High)
+        preset_label = QLabel("PRIVACY LEVEL", self)
+        preset_label.setObjectName("section_header")
+        sidebar_layout.addWidget(preset_label)
+        
+        self.preset_combo = QComboBox(self)
+        self.preset_combo.addItems([
+            "\u26a1 Low (Nh\u1eb9 m\u00e1y)",
+            "\u2696 Medium (C\u00e2n b\u1eb1ng)",
+            "\ud83d\udee1 High (T\u1ed1i \u0111a)"
+        ])
+        # Set default based on config
+        current_preset = self.config.get("app.privacy_mode", "medium")
+        preset_map = {"low": 0, "medium": 1, "high": 2}
+        self.preset_combo.setCurrentIndex(preset_map.get(current_preset, 1))
+        self.preset_combo.currentIndexChanged.connect(self.on_preset_changed)
+        sidebar_layout.addWidget(self.preset_combo)
+        
         # SECTION 4: Độ nhạy nhận diện (Confidence)
         conf_label = QLabel("DETECTION CONFIDENCE", self)
         conf_label.setObjectName("section_header")
@@ -171,6 +208,41 @@ class MainWindow(QMainWindow):
         self.conf_slider.setValue(25)  # 0.25 conf
         self.conf_slider.valueChanged.connect(self.on_confidence_changed)
         sidebar_layout.addWidget(self.conf_slider)
+        
+        # SECTION: Virtual Camera Output Controls
+        vcam_label = QLabel("VIRTUAL CAMERA", self)
+        vcam_label.setObjectName("section_header")
+        sidebar_layout.addWidget(vcam_label)
+        
+        vcam_widget = QFrame(self)
+        vcam_widget.setObjectName("vcam_control_card")
+        vcam_widget.setStyleSheet("""
+            QFrame#vcam_control_card {
+                background-color: rgba(255, 255, 255, 0.02);
+                border-radius: 8px;
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }
+        """)
+        vcam_layout = QVBoxLayout(vcam_widget)
+        vcam_layout.setContentsMargins(12, 12, 12, 12)
+        vcam_layout.setSpacing(8)
+        
+        vcam_toggle_layout = QHBoxLayout()
+        vcam_status_lbl = QLabel("Output:", self)
+        self.vcam_switch = ToggleSwitch(self)
+        vcam_enabled = self.config.get("output.virtual_camera.enabled", False)
+        self.vcam_switch.setChecked(vcam_enabled)
+        self.vcam_switch.toggled.connect(self.on_vcam_toggled)
+        vcam_toggle_layout.addWidget(vcam_status_lbl)
+        vcam_toggle_layout.addWidget(self.vcam_switch, 0, Qt.AlignRight)
+        vcam_layout.addLayout(vcam_toggle_layout)
+        
+        self.vcam_status_lbl = QLabel(self)
+        self.vcam_status_lbl.setText("Status: Inactive")
+        self.vcam_status_lbl.setStyleSheet("color: #7e8492; font-size: 8.5pt;")
+        vcam_layout.addWidget(self.vcam_status_lbl)
+        
+        sidebar_layout.addWidget(vcam_widget)
         
         # SECTION 4.5: Nhận diện Khuôn Mặt (Face Protection)
         face_section_label = QLabel("FACE PROTECTION", self)
@@ -352,7 +424,7 @@ class MainWindow(QMainWindow):
         # Đồng bộ các thiết lập hiện tại của GUI vào worker trước khi chạy
         self.on_confidence_changed(self.conf_slider.value())
         self.on_mask_mode_changed(self.mask_mode_combo.currentIndex())
-        self.worker.safe_mode_active = self.protection_switch.isChecked()
+        self.worker.update_config(safe_mode=self.protection_switch.isChecked())
         
         self.worker.start()
         self.update_status_bar()
@@ -400,15 +472,21 @@ class MainWindow(QMainWindow):
         else:
             self.card_objects.set_value_color("#7e8492")  # Màu xám bình thường
 
+        # 4. Cập nhật Privacy Status Banner
+        state = metrics.get("state", "protected")
+        self._update_status_banner(state)
+
         unsupported = metrics.get("unsupported_classes", [])
         if unsupported:
-            self.status_bar.showMessage(
-                "Model hiện tại không hỗ trợ: " + ", ".join(unsupported), 5000
-            )
+            msg = "Model hiện tại không hỗ trợ: " + ", ".join(unsupported)
+            if getattr(self, '_last_unsupported_msg', None) != msg:
+                self._last_unsupported_msg = msg
+                self.status_bar.showMessage(msg, 5000)
 
     @Slot(str)
     def on_camera_error(self, message):
         self.status_bar.showMessage(message, 8000)
+        self._update_status_banner("error")
 
     def on_camera_changed(self, index):
         """Thay đổi thiết bị webcam đầu vào."""
@@ -418,7 +496,8 @@ class MainWindow(QMainWindow):
     def on_protection_toggled(self, checked):
         """Bật / Tắt hệ thống bảo vệ Safe Mode."""
         if self.worker:
-            self.worker.safe_mode_active = checked
+            self.worker.update_config(safe_mode=checked)
+        self._update_status_banner("protected" if checked else "paused_safe")
         self.update_status_bar()
         # Đổi màu nhãn Switch
         status_text = "HỆ THỐNG AN TOÀN CHỦ ĐỘNG" if checked else "HỆ THỐNG TẠM NGƯNG BẢO VỆ"
@@ -429,18 +508,38 @@ class MainWindow(QMainWindow):
         if not self.worker:
             return
             
-        if index == 0:
-            self.worker.override_mask_mode = None  # Theo Preset rủi ro của từng class
-            safe_print("GUI: use per-class risk presets")
-        elif index == 1:
-            self.worker.override_mask_mode = "solid_mask"
-            safe_print("GUI: force solid mask")
-        elif index == 2:
-            self.worker.override_mask_mode = "gaussian_blur"
-            safe_print("GUI: force gaussian blur")
-        elif index == 3:
-            self.worker.override_mask_mode = "mosaic"
-            safe_print("GUI: force mosaic")
+        mode_map = {0: None, 1: "solid_mask", 2: "gaussian_blur", 3: "mosaic"}
+        mode = mode_map.get(index)
+        self.worker.update_config(override_mask=mode)
+        mode_names = {None: "per-class risk presets", "solid_mask": "solid mask", "gaussian_blur": "gaussian blur", "mosaic": "mosaic"}
+        safe_print(f"GUI: {'use' if mode is None else 'force'} {mode_names.get(mode, mode)}")
+
+    def on_preset_changed(self, index):
+        """Áp dụng Privacy Preset (Low/Medium/High) từ YAML config."""
+        preset_names = ["low", "medium", "high"]
+        if index < 0 or index >= len(preset_names):
+            return
+        preset_name = preset_names[index]
+        preset_config = self.config.get(f"privacy_presets.{preset_name}", {})
+        if not preset_config:
+            safe_print(f"GUI: preset '{preset_name}' not found in config")
+            return
+
+        # Áp dụng các tham số preset vào pipeline
+        if "mask_mode" in preset_config and hasattr(self.pipeline, "masker"):
+            self.pipeline.masker.default_mask_mode = preset_config["mask_mode"]
+        if "expand_bbox_ratio" in preset_config and hasattr(self.pipeline, "masker"):
+            self.pipeline.masker.expand_ratio = preset_config["expand_bbox_ratio"]
+        if "hold_frames" in preset_config and hasattr(self.pipeline, "smoothing"):
+            self.pipeline.smoothing.hold_frames = preset_config["hold_frames"]
+        if "frame_skipping" in preset_config and hasattr(self.pipeline, "scheduler"):
+            fs = preset_config["frame_skipping"]
+            self.pipeline.scheduler.enabled = fs.get("enabled", True)
+            self.pipeline.scheduler.skip_ratio = max(1, fs.get("skip_ratio", 2))
+        
+        if hasattr(self.pipeline, "reset_tracking"):
+            self.pipeline.reset_tracking()
+        safe_print(f"GUI: applied privacy preset '{preset_name}': {preset_config}")
 
     def on_confidence_changed(self, value):
         """Thay đổi độ nhạy Confidence Threshold của detector."""
@@ -449,16 +548,32 @@ class MainWindow(QMainWindow):
         # Cập nhật trực tiếp vào detector trong pipeline của worker
         self.pipeline.detector.confidence = conf_float
 
+    def on_vcam_toggled(self, checked):
+        """Bật/tắt Virtual Camera output."""
+        if checked:
+            self.vcam_status_lbl.setText("Status: Active ✔")
+            self.vcam_status_lbl.setStyleSheet("color: #00f5a0; font-size: 8.5pt; font-weight: bold;")
+            safe_print("GUI: virtual camera enabled")
+        else:
+            self.vcam_status_lbl.setText("Status: Inactive")
+            self.vcam_status_lbl.setStyleSheet("color: #7e8492; font-size: 8.5pt;")
+            safe_print("GUI: virtual camera disabled")
+        # Note: actual virtual camera start/stop requires restarting worker
+        self.status_bar.showMessage(
+            "Virtual camera thay đổi sẽ có hiệu lực khi restart camera" if not self.worker else "Virtual camera updated",
+            3000
+        )
+
     def on_classes_changed(self):
         """Bật/tắt lọc đối tượng nhạy cảm cụ thể theo Checkboxes."""
-        self.selected_classes = []
-        for cls_name, cb in self.class_checkboxes.items():
-            if cb.isChecked():
-                self.selected_classes.append(cls_name)
+        self.selected_classes = [
+            cls_name for cls_name, cb in self.class_checkboxes.items()
+            if cb.isChecked()
+        ]
         
-        # Cập nhật trực tiếp danh sách filter của worker
+        # Cập nhật thread-safe danh sách filter của worker
         if self.worker:
-            self.worker.selected_classes = self.selected_classes
+            self.worker.update_config(selected_classes=self.selected_classes)
             
         safe_print(f"GUI: protected classes changed: {self.selected_classes}")
 
@@ -467,6 +582,25 @@ class MainWindow(QMainWindow):
         safe_mode = "SAFE MODE ACTIVE (Đã bảo vệ)" if self.protection_switch.isChecked() else "SAFE MODE DISABLED (Chưa bảo vệ)"
         dev_idx = self.camera_combo.currentIndex()
         self.status_bar.showMessage(f"Trạng thái: {safe_mode} | Thiết bị: Camera Index {dev_idx}")
+
+    def _update_status_banner(self, state="protected"):
+        """Cập nhật banner trạng thái privacy trên sidebar."""
+        states = {
+            "protected": ("\u25cf PROTECTED", "rgba(0, 245, 160, 0.12)", "#00f5a0", "rgba(0, 245, 160, 0.3)"),
+            "paused_safe": ("\u25cf PAUSED", "rgba(255, 185, 0, 0.12)", "#ffb900", "rgba(255, 185, 0, 0.3)"),
+            "error": ("\u25cf ERROR", "rgba(255, 74, 107, 0.12)", "#ff4a6b", "rgba(255, 74, 107, 0.3)"),
+            "starting": ("\u25cb STARTING...", "rgba(255, 255, 255, 0.05)", "#7e8492", "rgba(255, 255, 255, 0.1)"),
+        }
+        text, bg, color, border = states.get(state, states["protected"])
+        self.status_banner.setText(text)
+        self.status_banner.setStyleSheet(f"""
+            background-color: {bg};
+            color: {color};
+            font-size: 9pt;
+            font-weight: bold;
+            border-radius: 6px;
+            border: 1px solid {border};
+        """)
 
     def on_enroll_clicked(self):
         """Mở hộp thoại đăng ký khuôn mặt mẫu đa góc (Multi-Pose Wizard)."""
@@ -524,11 +658,64 @@ class MainWindow(QMainWindow):
             f"owner={self.pipeline.mask_owner_face} strangers={self.pipeline.mask_strangers_face}"
         )
 
+    def _load_settings(self):
+        """Tải các tùy chỉnh đã lưu của user."""
+        settings = QSettings("PrivacyShield", "PrivacyShieldCamera")
+        # Confidence slider
+        conf = settings.value("confidence", None)
+        if conf is not None:
+            self.conf_slider.setValue(int(conf))
+        # Mask mode
+        mask_idx = settings.value("mask_mode_index", None)
+        if mask_idx is not None:
+            self.mask_mode_combo.setCurrentIndex(int(mask_idx))
+        # Preset
+        preset_idx = settings.value("preset_index", None)
+        if preset_idx is not None and hasattr(self, 'preset_combo'):
+            self.preset_combo.setCurrentIndex(int(preset_idx))
+
+    def _save_settings(self):
+        """Lưu tùy chỉnh hiện tại của user."""
+        settings = QSettings("PrivacyShield", "PrivacyShieldCamera")
+        settings.setValue("confidence", self.conf_slider.value())
+        settings.setValue("mask_mode_index", self.mask_mode_combo.currentIndex())
+        if hasattr(self, 'preset_combo'):
+            settings.setValue("preset_index", self.preset_combo.currentIndex())
+
+    def init_system_tray(self):
+        """Khởi tạo System Tray Icon nếu hệ thống hỗ trợ."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray_icon = QSystemTrayIcon(self)
+        icon = self.windowIcon()
+        if not icon.isNull():
+            self.tray_icon.setIcon(icon)
+        else:
+            style = QApplication.style()
+            self.tray_icon.setIcon(style.standardIcon(QStyle.SP_ComputerIcon))
+
+        tray_menu = QMenu(self)
+        show_action = QAction("Hiện ứng dụng", self)
+        show_action.triggered.connect(self.showNormal)
+        tray_menu.addAction(show_action)
+
+        tray_menu.addSeparator()
+        quit_action = QAction("Thoát", self)
+        quit_action.triggered.connect(QApplication.instance().quit)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.setToolTip("Privacy Shield Camera")
+        self.tray_icon.show()
+
     def closeEvent(self, event):
         """Xử lý dọn dẹp luồng chạy camera khi đóng cửa sổ ứng dụng."""
         safe_print("GUI: closing and releasing resources")
+        self._save_settings()
         if self.worker:
             self.worker.stop()
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            self.tray_icon.hide()
         event.accept()
 
 

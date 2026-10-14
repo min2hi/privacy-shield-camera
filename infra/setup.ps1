@@ -76,20 +76,19 @@ Write-Host "[5/6] Kiểm tra Ollama host và model llama3.2:3b..." -ForegroundCo
 if (Get-Command ollama -ErrorAction SilentlyContinue) {
     ollama list | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Ollama CLI có mặt nhưng service chưa chạy tại localhost:11434" -ForegroundColor Red
-        Write-Host "    Hãy mở Ollama rồi chạy lại script." -ForegroundColor Yellow
-        exit 1
+        Write-Host "  ⚠ Ollama CLI có mặt nhưng service chưa chạy tại localhost:11434" -ForegroundColor Yellow
+        Write-Host "    Hãy mở Ollama khi cần dùng mô hình local." -ForegroundColor Yellow
+    } else {
+        ollama pull llama3.2:3b
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ⚠ Không tải được model llama3.2:3b" -ForegroundColor Yellow
+        } else {
+            Write-Host "  ✓ Ollama host và model đã sẵn sàng" -ForegroundColor Green
+        }
     }
-    ollama pull llama3.2:3b
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Không tải được model llama3.2:3b" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "  ✓ Ollama host và model đã sẵn sàng" -ForegroundColor Green
 } else {
-    Write-Host "  ✗ Không tìm thấy Ollama CLI trên Windows host." -ForegroundColor Red
+    Write-Host "  ⚠ Không tìm thấy Ollama CLI trên Windows host." -ForegroundColor Yellow
     Write-Host "    Cài Ollama hoặc đổi LiteLLM config sang cloud provider trước khi tiếp tục." -ForegroundColor Yellow
-    exit 1
 }
 
 # --- Bước 6: Hiển thị URLs ---
@@ -102,7 +101,8 @@ Write-Host ""
 Write-Host "  🔄 LiteLLM Gateway (Governance):  http://localhost:4000" -ForegroundColor Cyan
 Write-Host "     → Giao diện quản lý: http://localhost:4000/ui" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  🗄️  PostgreSQL (Memory & RAG):     localhost:5432" -ForegroundColor Cyan
+$pgPort = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { "5435" }
+Write-Host "  🗄️  PostgreSQL (Memory & RAG):     localhost:$pgPort" -ForegroundColor Cyan
 Write-Host "     → Dùng pgAdmin hoặc DBeaver để xem database" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  ⚡ Redis (Checkpoints):            localhost:6379" -ForegroundColor Cyan
