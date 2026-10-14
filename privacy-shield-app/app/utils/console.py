@@ -3,14 +3,17 @@ console.py — Backward-compatible wrapper quanh logging module.
 safe_print() vẫn hoạt động nhưng giờ đi qua Python standard logging.
 """
 
+from __future__ import annotations
+
 import logging
 import sys
+from typing import Any
 
 # Logger mặc định cho các module chưa migrate sang get_logger()
-_logger = logging.getLogger("privacy_shield.legacy")
+_logger: logging.Logger = logging.getLogger("privacy_shield.legacy")
 
 
-def safe_print(message=""):
+def safe_print(message: Any = "") -> None:
     """Backward-compatible: ghi log qua logging module.
     
     Các module mới nên dùng:

@@ -3,12 +3,14 @@ logging_config.py — Cấu hình logging chuẩn cho Privacy Shield Camera.
 Sử dụng Python standard logging thay vì safe_print() tùy chỉnh.
 """
 
+from __future__ import annotations
+
 import logging
 import sys
 from pathlib import Path
 
 
-def setup_logging(level=logging.INFO, log_file=None):
+def setup_logging(level: int = logging.INFO, log_file: str | Path | None = None) -> logging.Logger:
     """Khởi tạo logging cho toàn bộ ứng dụng.
     
     Args:
@@ -49,7 +51,7 @@ def setup_logging(level=logging.INFO, log_file=None):
     return root_logger
 
 
-def get_logger(name):
+def get_logger(name: str) -> logging.Logger:
     """Lấy logger con cho module cụ thể.
     
     Usage:

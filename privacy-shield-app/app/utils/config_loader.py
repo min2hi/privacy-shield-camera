@@ -1,13 +1,19 @@
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-APP_ROOT = Path(__file__).resolve().parents[2]
-ALLOWED_MASK_MODES = {"solid_mask", "mosaic", "gaussian_blur"}
+APP_ROOT: Path = Path(__file__).resolve().parents[2]
+ALLOWED_MASK_MODES: set[str] = {"solid_mask", "mosaic", "gaussian_blur"}
 
 
 class ConfigLoader:
-    def __init__(self, config_path="configs/default.yaml"):
+    config_path: Path
+    config: dict[str, Any]
+
+    def __init__(self, config_path: str | Path = "configs/default.yaml") -> None:
         candidate = Path(config_path).expanduser()
         if not candidate.is_absolute():
             cwd_candidate = (Path.cwd() / candidate).resolve()
@@ -16,7 +22,7 @@ class ConfigLoader:
         self.config = {}
         self.load_config()
 
-    def load_config(self):
+    def load_config(self) -> None:
         if not self.config_path.is_file():
             raise FileNotFoundError(f"Không tìm thấy file cấu hình tại: {self.config_path}")
 
@@ -29,12 +35,12 @@ class ConfigLoader:
         self.config = loaded
         self.validate()
 
-    def get(self, key_path, default=None):
+    def get(self, key_path: str, default: Any = None) -> Any:
         """
         Lấy cấu hình theo key path dạng 'app.privacy_mode' hoặc 'privacy.mask_mode'.
         """
         keys = key_path.split(".")
-        val = self.config
+        val: Any = self.config
         try:
             for k in keys:
                 val = val[k]
@@ -42,7 +48,7 @@ class ConfigLoader:
         except (KeyError, TypeError):
             return default
 
-    def resolve_path(self, key_path, default=None):
+    def resolve_path(self, key_path: str, default: Any = None) -> Path | None:
         """Resolve a configured path against the desktop app root."""
         raw_path = self.get(key_path, default)
         if raw_path is None:
@@ -50,11 +56,11 @@ class ConfigLoader:
         path = Path(raw_path).expanduser()
         return path.resolve() if path.is_absolute() else (APP_ROOT / path).resolve()
 
-    def validate(self):
+    def validate(self) -> None:
         """Reject invalid runtime configuration before opening models or cameras."""
-        errors = []
+        errors: list[str] = []
 
-        def require_positive(key):
+        def require_positive(key: str) -> None:
             value = self.get(key)
             if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
                 errors.append(f"{key} phải là số > 0")
@@ -100,7 +106,7 @@ class ConfigLoader:
         if errors:
             raise ValueError("Cấu hình không hợp lệ:\n- " + "\n- ".join(errors))
 
-    def set(self, key_path, value):
+    def set(self, key_path: str, value: Any) -> None:
         """
         Ghi đè cấu hình tạm thời trong bộ nhớ.
         """

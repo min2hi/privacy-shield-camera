@@ -1,7 +1,15 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
 import cv2
+import numpy as np
 
 
-def clip_bbox(bbox, frame_shape):
+def clip_bbox(
+    bbox: Sequence[float | int], frame_shape: Sequence[int] | tuple[int, ...]
+) -> tuple[int, int, int, int]:
     """Normalize and clip an xyxy box to a frame, returning an empty box if invalid."""
     h, w = frame_shape[:2]
     x1, y1, x2, y2 = (int(value) for value in bbox)
@@ -14,7 +22,9 @@ def clip_bbox(bbox, frame_shape):
     y2 = min(max(0, y2), h)
     return x1, y1, x2, y2
 
-def expand_bbox(bbox, frame_shape, ratio=0.15):
+def expand_bbox(
+    bbox: Sequence[float | int], frame_shape: Sequence[int] | tuple[int, ...], ratio: float = 0.15
+) -> tuple[int, int, int, int]:
     """
     Mở rộng bounding box theo tỷ lệ phần trăm (giữ nguyên tâm).
     bbox: (x1, y1, x2, y2)
@@ -39,7 +49,9 @@ def expand_bbox(bbox, frame_shape, ratio=0.15):
     return nx1, ny1, nx2, ny2
 
 
-def apply_solid_mask(frame, bbox, color=(0, 0, 0)):
+def apply_solid_mask(
+    frame: np.ndarray, bbox: Sequence[float | int], color: tuple[int, int, int] = (0, 0, 0)
+) -> None:
     """
     Che hoàn toàn vùng bbox bằng hình chữ nhật màu đơn sắc (mặc định là đen).
     """
@@ -49,7 +61,9 @@ def apply_solid_mask(frame, bbox, color=(0, 0, 0)):
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
 
 
-def apply_gaussian_blur(frame, bbox, kernel_size=51):
+def apply_gaussian_blur(
+    frame: np.ndarray, bbox: Sequence[float | int], kernel_size: int = 51
+) -> None:
     """
     Làm mờ vùng bbox bằng bộ lọc Gauss (Gaussian Blur).
     """
@@ -69,7 +83,9 @@ def apply_gaussian_blur(frame, bbox, kernel_size=51):
     frame[y1:y2, x1:x2] = blurred
 
 
-def apply_mosaic(frame, bbox, block_size=None):
+def apply_mosaic(
+    frame: np.ndarray, bbox: Sequence[float | int], block_size: int | None = None
+) -> None:
     """
     Tạo hiệu ứng điểm ảnh ô vuông (Mosaic) trên vùng bbox.
     """
@@ -94,7 +110,17 @@ def apply_mosaic(frame, bbox, block_size=None):
 
 
 class Masker:
-    def __init__(self, class_mask_presets=None, default_mask_mode="mosaic", expand_ratio=0.15):
+    class_mask_presets: dict[str, str]
+    default_mask_mode: str
+    expand_ratio: float
+    override_mask_mode: str | None
+
+    def __init__(
+        self,
+        class_mask_presets: dict[str, str] | None = None,
+        default_mask_mode: str = "mosaic",
+        expand_ratio: float = 0.15,
+    ) -> None:
         """
         class_mask_presets: Map tên class với cách che (Risk Level).
         default_mask_mode: Cách che mặc định nếu class không nằm trong preset.
@@ -105,7 +131,7 @@ class Masker:
         self.expand_ratio = expand_ratio
         self.override_mask_mode = None
 
-    def apply_masks(self, frame, detections):
+    def apply_masks(self, frame: np.ndarray, detections: Sequence[dict[str, Any]]) -> np.ndarray:
         """
         Đọc các bbox và áp dụng mặt nạ che tương ứng lên frame.
         """
