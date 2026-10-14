@@ -13,6 +13,13 @@ class FaceEnrollmentDialog(QDialog):
         self.worker = worker
         self.current_step = 0  # 0: Nhìn thẳng, 1: Nghiêng trái, 2: Nghiêng phải
         
+        # Sao lưu embeddings trước khi bắt đầu enrollment để revert nếu cancel
+        self._backup_embeddings = None
+        if hasattr(worker, 'pipeline') and hasattr(worker.pipeline, 'face_recognizer'):
+            fr = worker.pipeline.face_recognizer
+            if hasattr(fr, 'registered_embeddings'):
+                self._backup_embeddings = list(fr.registered_embeddings)  # shallow copy
+        
         self.setWindowTitle("Đăng Ký Khuôn Mặt Mẫu (Multi-Pose)")
         self.setFixedSize(500, 360)
         self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
@@ -225,8 +232,12 @@ class FaceEnrollmentDialog(QDialog):
             self.capture_btn.setText("THỬ LẠI GÓC NÀY")
             
     def reject(self):
-        """Khôi phục trạng thái nhận diện bình thường của worker khi hủy đăng ký."""
+        """Khôi phục trạng thái nhận diện bình thường và revert embeddings khi hủy đăng ký."""
         self.worker.enroll_pose_index = -1
+        # Revert embeddings về trạng thái trước enrollment
+        if self._backup_embeddings is not None:
+            if hasattr(self.worker, 'pipeline') and hasattr(self.worker.pipeline, 'face_recognizer'):
+                self.worker.pipeline.face_recognizer.registered_embeddings = self._backup_embeddings
         super().reject()
         
     def accept(self):

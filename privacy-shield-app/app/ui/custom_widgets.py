@@ -42,13 +42,26 @@ class ToggleSwitch(QAbstractButton):
         self.anim.setEndValue(end_val)
         self.anim.start()
 
+    def checkStateSet(self):
+        """Đồng bộ vị trí thumb khi setChecked() được gọi từ code."""
+        super().checkStateSet()
+        end_val = self.width() - self.height() + 3.0 if self.isChecked() else 3.0
+        self.anim.stop()
+        self._thumb_position = end_val
+        self.update()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Vẽ thân switch (Background)
         # Sử dụng xanh Mint neon khi Bật (#00f5a0) và xám mờ khi Tắt
-        bg_color = QColor("#00f5a0") if self.isChecked() else QColor("rgba(255, 255, 255, 0.1)")
+        if not self.isEnabled():
+            bg_color = QColor("rgba(255, 255, 255, 0.05)")
+        elif self.isChecked():
+            bg_color = QColor("#00f5a0")
+        else:
+            bg_color = QColor("rgba(255, 255, 255, 0.1)")
         painter.setBrush(bg_color)
         painter.setPen(QPen(QColor("rgba(255, 255, 255, 0.05)"), 1))
         painter.drawRoundedRect(0, 0, self.width(), self.height(), self.height()/2, self.height()/2)
@@ -90,5 +103,8 @@ class MetricCard(QFrame):
         self.value_label.setText(f"{value} {unit}".strip())
         
     def set_value_color(self, color_hex):
-        """Thay đổi màu chữ giá trị động (ví dụ: đỏ khi lag, xanh mint khi mượt)."""
+        """Thay đổi màu chữ giá trị động — cache để tránh re-parse CSS 90 lần/giây."""
+        if getattr(self, '_current_color', None) == color_hex:
+            return
+        self._current_color = color_hex
         self.value_label.setStyleSheet(f"color: {color_hex}; font-size: 14pt; font-weight: bold; border: none; background: transparent;")

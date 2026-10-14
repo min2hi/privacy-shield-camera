@@ -6,8 +6,10 @@ import sys
 
 
 def safe_print(message=""):
-    text = f"{message}\n"
     stream = sys.stdout
+    if stream is None:
+        return
+    text = f"{message}\n"
     buffer = getattr(stream, "buffer", None)
     if buffer is not None:
         buffer.write(text.encode("utf-8", errors="backslashreplace"))

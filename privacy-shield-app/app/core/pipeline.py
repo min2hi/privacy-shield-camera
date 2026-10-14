@@ -74,7 +74,7 @@ class PrivacyPipeline:
         )
         
         self.fail_safe = self.config.get("privacy.fail_safe", True)
-        self.last_time = time.time()
+        self.last_time = time.perf_counter()
         self.fps = 0.0
         self.last_face_tracks = []
 
@@ -85,9 +85,12 @@ class PrivacyPipeline:
         self.last_face_tracks = []
 
     @staticmethod
-    def privacy_screen(frame, reason="SAFE MODE ACTIVE"):
+    def privacy_screen(frame, reason="SAFE MODE ACTIVE", *, fallback_size=(480, 640)):
         """Create a fail-closed frame without retaining any source pixels."""
-        h, w = frame.shape[:2]
+        if frame is not None:
+            h, w = frame.shape[:2]
+        else:
+            h, w = fallback_size
         screen = np.zeros((h, w, 3), dtype=np.uint8)
         cv2.putText(
             screen,
@@ -114,13 +117,22 @@ class PrivacyPipeline:
         Xử lý chính trên mỗi frame webcam.
         Trả về: (processed_frame, metrics)
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         try:
             requested_classes = list(selected_classes or [])
             supported_classes = self.detector.supported_class_names
             unsupported_classes = sorted(set(requested_classes) - supported_classes)
             effective_classes = [name for name in requested_classes if name in supported_classes]
+
+            # Invalidate tracking cache khi danh sách class thay đổi
+            if not hasattr(self, '_last_effective_classes'):
+                self._last_effective_classes = None
+            current_classes_key = tuple(sorted(effective_classes)) if effective_classes else None
+            if current_classes_key != self._last_effective_classes:
+                if self._last_effective_classes is not None:
+                    self.reset_tracking()
+                self._last_effective_classes = current_classes_key
 
             # 1. Quyết định xem có chạy YOLO hay không (Frame Skipping)
             if self.scheduler.should_detect():
@@ -178,16 +190,29 @@ class PrivacyPipeline:
                         "frames_since_update": frames_since_update
                     })
                     
-                    # 2.2 Áp dụng quyết định che phủ
+                    # 2.2 Áp dụng quyết định che phủ (Fail-Closed Privacy)
                     should_mask = False
                     mask_mode = "gaussian_blur"
+                    has_registered = (
+                        hasattr(self.face_recognizer, 'registered_embeddings')
+                        and self.face_recognizer.registered_embeddings
+                    )
                     
-                    if is_matched and self.mask_owner_face:
-                        should_mask = True
-                        mask_mode = "gaussian_blur"  # Che khuôn mặt của chính bạn (chủ sở hữu)
-                    elif not is_matched and self.mask_strangers_face:
-                        should_mask = True
-                        mask_mode = "mosaic"         # Che khuôn mặt của người lạ lọt vào webcam
+                    if is_matched:
+                        # Xác nhận là chủ sở hữu
+                        if self.mask_owner_face:
+                            should_mask = True
+                            mask_mode = "gaussian_blur"
+                    else:
+                        # Không khớp: có thể là người lạ HOẶC chủ sở hữu bị nhận sai
+                        if self.mask_strangers_face:
+                            should_mask = True
+                            mask_mode = "mosaic"
+                        elif self.mask_owner_face and has_registered:
+                            # Fail-closed: nếu đã đăng ký mặt chủ và muốn che chủ,
+                            # thì mặt không xác minh được cũng phải che (có thể là chủ bị false negative)
+                            should_mask = True
+                            mask_mode = "gaussian_blur"
                         
                     if should_mask:
                         face_detections.append({
@@ -209,10 +234,10 @@ class PrivacyPipeline:
             processed_frame = self.masker.apply_masks(frame, smoothed_detections)
 
             # 4. Tính toán thông số hiệu năng
-            latency = (time.time() - start_time) * 1000.0
+            latency = (time.perf_counter() - start_time) * 1000.0
             
             # Tính FPS trung bình trượt (Moving Average FPS)
-            curr_time = time.time()
+            curr_time = time.perf_counter()
             time_diff = curr_time - self.last_time
             self.last_time = curr_time
             if time_diff > 0:
