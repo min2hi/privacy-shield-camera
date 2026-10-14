@@ -25,22 +25,19 @@ class FrameScheduler:
         Cập nhật danh sách bbox mới nhất từ YOLO và tăng bộ đếm frame.
         """
         self.last_detections = detections
-        self.frame_counter += 1
+        self.frame_counter = (self.frame_counter + 1) % self.skip_ratio
 
     def get_last_detections(self):
         """
-        Lấy danh sách bbox của lần detect gần nhất.
+        Lấy bản sao danh sách bbox của lần detect gần nhất.
         """
-        return self.last_detections
+        return list(self.last_detections)
 
     def skip_frame(self):
         """
         Tăng bộ đếm frame khi bỏ qua việc chạy YOLO (reuse bbox).
         """
-        self.frame_counter += 1
-        # Giới hạn tràn số
-        if self.frame_counter >= 1000000:
-            self.frame_counter = 0
+        self.frame_counter = (self.frame_counter + 1) % self.skip_ratio
 
     def reset(self):
         """Drop cached detections when a capture/model/policy session changes."""

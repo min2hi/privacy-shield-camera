@@ -91,7 +91,7 @@ class Detector:
 
             confidence = float(box.conf[0].item())
             # Tọa độ bbox: x1, y1, x2, y2
-            xyxy = box.xyxy[0].cpu().numpy()
+            xyxy = box.xyxy[0].cpu().numpy().reshape(-1)
             x1, y1, x2, y2 = map(int, xyxy)
 
             detections.append({
