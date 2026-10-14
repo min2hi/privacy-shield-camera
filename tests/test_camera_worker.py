@@ -112,3 +112,31 @@ def test_disconnect_is_bounded_and_emits_error_screen():
     assert emitted[-1]["error"] == "camera disconnected"
     assert errors == ["Camera mất kết nối"]
     assert capture.released
+
+
+def test_update_config_and_get_config():
+    worker = CameraWorker(FakePipeline())
+    worker.update_config(
+        safe_mode=False,
+        override_mask="solid_mask",
+        selected_classes=["screen", "credit_card"],
+    )
+    safe_mode, override_mask, classes = worker._get_config()
+    assert safe_mode is False
+    assert override_mask == "solid_mask"
+    assert classes == ["screen", "credit_card"]
+
+    worker.update_config(safe_mode=True)
+    safe_mode, override_mask, classes = worker._get_config()
+    assert safe_mode is True
+    assert override_mask == "solid_mask"
+    assert classes == ["screen", "credit_card"]
+
+
+def test_stop_sets_running_false_without_releasing_capture():
+    capture = FakeCapture([])
+    worker = CameraWorker(FakePipeline(), capture_factory=lambda _idx: capture)
+    worker._capture = capture
+    worker.stop()
+    assert worker.running is False
+    assert capture.released is False
