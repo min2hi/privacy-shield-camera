@@ -14,19 +14,55 @@ Luồng xử lý (State Graph):
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_openai import ChatOpenAI
-from langfuse.langchain import CallbackHandler as LangfuseCallback
-from langgraph.graph import END, START, StateGraph
-from rich.console import Console
-from rich.panel import Panel
+try:
+    from langchain_core.messages import BaseMessage, HumanMessage
+except ImportError:
+    class BaseMessage:  # type: ignore[no-redef]
+        def __init__(self, content: str = "") -> None:
+            self.content = content
+
+    class HumanMessage(BaseMessage):  # type: ignore[no-redef]
+        pass
+
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None  # type: ignore[assignment,misc]
+
+try:
+    from langfuse.langchain import CallbackHandler as LangfuseCallback
+except ImportError:
+    LangfuseCallback = None  # type: ignore[assignment,misc]
+
+try:
+    from langgraph.graph import END, START, StateGraph
+except ImportError:
+    END = "__end__"  # type: ignore[assignment]
+    START = "__start__"  # type: ignore[assignment]
+    StateGraph = None  # type: ignore[assignment,misc]
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    console: Any = Console()
+except ImportError:
+    class _FallbackConsole:
+        def print(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    def Panel(text: str, **kwargs: Any) -> str:  # type: ignore[misc]
+        return text
+
+    console = _FallbackConsole()
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (
+    AGENT_WORKSPACE_PATH,
     DATABASE_URL,
     DEFAULT_MODEL,
     LANGFUSE_HOST,
@@ -37,7 +73,6 @@ from config import (
     REDIS_URL,
 )
 
-console = Console()
 
 # ──────────────────────────────────────────────────────────
 # 1. State Definition — Trạng thái của Agent (LangGraph)
@@ -45,10 +80,10 @@ console = Console()
 class AgentState(TypedDict):
     """Toàn bộ trạng thái được LangGraph quản lý và lưu vào Redis."""
     messages: list[BaseMessage]         # Lịch sử hội thoại
-    context_docs: list[dict]            # Tài liệu RAG đã tìm thấy
+    context_docs: list[dict[str, Any]]  # Tài liệu RAG đã tìm thấy
     long_term_facts: list[str]          # Facts từ Mem0 long-term memory
     plan: str                           # Kế hoạch do LLM đề ra
-    tool_results: list[dict]            # Kết quả từ các tool đã gọi
+    tool_results: list[dict[str, Any]]  # Kết quả từ các tool đã gọi
     final_answer: str                   # Câu trả lời cuối cùng cho user
     session_id: str                     # ID session để checkpoint
     error: str | None                   # Lỗi nếu có
@@ -57,8 +92,10 @@ class AgentState(TypedDict):
 # ──────────────────────────────────────────────────────────
 # 2. LLM Client — Trỏ vào LiteLLM Gateway (Governance Pillar)
 # ──────────────────────────────────────────────────────────
-def get_llm() -> ChatOpenAI:
+def get_llm() -> Any:
     """Tạo LLM client kết nối qua LiteLLM để quản lý budget/rate limit."""
+    if ChatOpenAI is None:
+        raise RuntimeError("langchain_openai chưa được cài đặt trong môi trường hiện tại.")
     return ChatOpenAI(
         model=DEFAULT_MODEL,
         openai_api_base=f"{LITELLM_URL}/v1",
@@ -90,7 +127,7 @@ def security_check(state: AgentState) -> AgentState:
         ".env", "secrets", "api_key=", "password=",
     ]
 
-    lower_msg = last_message.lower()
+    lower_msg = str(last_message).lower()
     for pattern in blocked_patterns:
         if pattern in lower_msg:
             console.print(f"[red]🔒 Security: Phát hiện pattern nguy hiểm: '{pattern}'[/red]")
@@ -102,16 +139,16 @@ def security_check(state: AgentState) -> AgentState:
 def load_context(state: AgentState) -> AgentState:
     """
     Context Pillar: Nạp ngữ cảnh từ 2 nguồn:
-    1. pgvector RAG — tài liệu và code liên quan
-    2. Mem0 — facts/quyết định dài hạn của dự án
+    1. pgvector RAG (hoặc fallback tìm kiếm cục bộ trong docs/)
+    2. Mem0 / PostgreSQL long-term memory (hoặc fallback quyết định kiến trúc cốt lõi)
     """
     if state.get("error"):
         return state
 
-    last_message = state["messages"][-1].content if state["messages"] else ""
+    last_message = str(state["messages"][-1].content) if state["messages"] else ""
     console.print("[cyan]🔍 Đang nạp ngữ cảnh từ RAG và Long-term Memory...[/cyan]")
 
-    # RAG Search (pgvector)
+    # RAG Search (pgvector + local markdown fallback)
     context_docs = _rag_search(last_message, top_k=5)
 
     # Mem0 Long-term Memory
@@ -159,17 +196,16 @@ def reason(state: AgentState) -> AgentState:
 
 Hãy trả lời bằng tiếng Việt, ngắn gọn và chính xác."""
 
-    llm = get_llm()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        *[{"role": "user" if isinstance(m, HumanMessage) else "assistant",
-           "content": m.content}
-          for m in state["messages"][-10:]]  # Chỉ lấy 10 messages gần nhất
-    ]
-
     try:
+        llm = get_llm()
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *[{"role": "user" if isinstance(m, HumanMessage) else "assistant",
+               "content": m.content}
+              for m in state["messages"][-10:]]  # Chỉ lấy 10 messages gần nhất
+        ]
         response = llm.invoke(messages)
-        plan = response.content
+        plan = str(response.content)
     except Exception as e:
         plan = f"Lỗi khi gọi LLM: {e}"
 
@@ -178,24 +214,78 @@ Hãy trả lời bằng tiếng Việt, ngắn gọn và chính xác."""
 
 def update_memory(state: AgentState) -> AgentState:
     """
-    Memory Pillar: Sau mỗi lượt hội thoại, trích xuất và lưu facts mới vào Mem0.
+    Memory Pillar: Sau mỗi lượt hội thoại, lưu session / quyết định mới vào Mem0 hoặc PostgreSQL.
     """
     if state.get("error") or not state.get("final_answer"):
         return state
 
-    # TODO: Tích hợp Mem0 để tự động extract facts từ hội thoại
-    # Ví dụ: nếu user nói "Quyết định dùng YOLOv8s thay vì YOLOv8n",
-    # Mem0 sẽ tự lưu fact này vào PostgreSQL để nhớ mãi mãi.
     console.print("[dim]💾 Cập nhật Long-term Memory...[/dim]")
+    user_msg = str(state["messages"][-1].content) if state.get("messages") else ""
+    answer = state.get("final_answer", "")
+    session_id = state.get("session_id", "default")
+
+    try:
+        from mem0 import MemoryClient
+        client = MemoryClient()
+        client.add(
+            [{"role": "user", "content": user_msg}, {"role": "assistant", "content": answer}],
+            user_id=f"project_{session_id}",
+        )
+    except Exception:
+        pass
 
     return state
 
 
 # ──────────────────────────────────────────────────────────
-# 4. Helper Functions (RAG & Memory)
+# 4. Helper Functions (RAG & Memory + Offline Local Fallbacks)
 # ──────────────────────────────────────────────────────────
-def _rag_search(query: str, top_k: int = 5) -> list[dict]:
-    """Tìm kiếm tài liệu liên quan trong pgvector."""
+def _local_doc_search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    """Fallback tìm kiếm tài liệu cục bộ trong thư mục docs/ khi PostgreSQL/pgvector không chạy."""
+    docs_dir = AGENT_WORKSPACE_PATH / "docs"
+    if not docs_dir.exists():
+        return []
+
+    tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) >= 2]
+    if not tokens:
+        return []
+
+    scored_chunks: list[dict[str, Any]] = []
+    for md_file in sorted(docs_dir.rglob("*.md")):
+        try:
+            text = md_file.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) >= 40]
+        for idx, para in enumerate(paragraphs):
+            lower_para = para.lower()
+            hits = sum(1 for tok in tokens if tok in lower_para)
+            if hits > 0:
+                score = hits / len(tokens)
+                scored_chunks.append({
+                    "document_id": str(md_file.relative_to(AGENT_WORKSPACE_PATH)).replace("\\", "/"),
+                    "doc_type": "docs",
+                    "content": para[:800],
+                    "metadata": {"filename": md_file.name, "chunk_index": idx, "source": "local_fallback"},
+                    "similarity": round(score, 3),
+                })
+
+    scored_chunks.sort(key=lambda item: item["similarity"], reverse=True)
+    return scored_chunks[:top_k]
+
+
+def _local_facts_fallback() -> list[str]:
+    """Danh sách quyết định kiến trúc cốt lõi khi chạy offline không có DB."""
+    return [
+        "Dùng YOLOv8n + OpenCV Hybrid cho MVP realtime, hướng tới YOLOv8s fine-tuned cho 6 privacy classes.",
+        "Dùng PySide6 (Qt6) và QThread tách biệt hoàn toàn UI với pipeline xử lý video.",
+        "Áp dụng Fail-Closed Privacy Policy: lỗi pipeline hoặc tạm dừng đều xuất màn hình khóa bảo mật, không bao giờ lộ frame thô.",
+        "Mẫu khuôn mặt sinh trắc học (512-dim MobileFaceNet) được mã hóa Fernet trên đĩa kèm xác minh SHA256.",
+    ]
+
+
+def _rag_search(query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    """Tìm kiếm tài liệu liên quan trong pgvector, tự động fallback sang tìm kiếm file cục bộ."""
     try:
         import os
 
@@ -243,19 +333,19 @@ def _rag_search(query: str, top_k: int = 5) -> list[dict]:
             for r in rows
         ]
     except Exception as e:
-        console.print(f"[yellow]⚠ RAG search lỗi: {e}[/yellow]")
-        return []
+        console.print(f"[yellow]⚠ pgvector RAG không khả dụng ({e}), chuyển sang Local Docs Search...[/yellow]")
+        return _local_doc_search(query, top_k=top_k)
 
 
 def _mem0_recall(session_id: str, query: str) -> list[str]:
-    """Truy xuất facts từ Mem0 long-term memory."""
+    """Truy xuất facts từ Mem0 long-term memory, fallback sang PostgreSQL hoặc local facts."""
     try:
         from mem0 import MemoryClient
         client = MemoryClient()  # Sử dụng cấu hình từ env
         memories = client.search(query, user_id=f"project_{session_id}", limit=10)
         return [m["memory"] for m in memories]
     except Exception:
-        # Fallback: đọc từ PostgreSQL project_decisions
+        # Fallback 1: đọc từ PostgreSQL project_decisions
         try:
             import psycopg2
             conn = psycopg2.connect(DATABASE_URL)
@@ -265,16 +355,21 @@ def _mem0_recall(session_id: str, query: str) -> list[str]:
                 )
                 rows = cur.fetchall()
             conn.close()
-            return [r[0] for r in rows]
+            if rows:
+                return [r[0] for r in rows]
         except Exception:
-            return []
+            pass
+        # Fallback 2: quyết định kiến trúc cốt lõi cục bộ
+        return _local_facts_fallback()
 
 
 # ──────────────────────────────────────────────────────────
 # 5. Build Graph (LangGraph)
 # ──────────────────────────────────────────────────────────
-def build_agent_graph() -> StateGraph:
+def build_agent_graph() -> Any:
     """Xây dựng và định nghĩa các node/edge của LangGraph Agent."""
+    if StateGraph is None:
+        raise RuntimeError("langgraph chưa được cài đặt trong môi trường hiện tại.")
     graph = StateGraph(AgentState)
 
     # Đăng ký các nodes

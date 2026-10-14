@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import os
+from collections.abc import Collection
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
 from app.core.model_bundle import ModelManifest
-from app.utils.console import safe_print
+from app.utils.logging_config import get_logger
 
-HYBRID_PRIVACY_CLASSES = frozenset({
+logger = get_logger(__name__)
+
+HYBRID_PRIVACY_CLASSES: frozenset[str] = frozenset({
     "cell phone",
     "id_card",
     "credit_card",
@@ -19,16 +26,25 @@ HYBRID_PRIVACY_CLASSES = frozenset({
 
 
 class Detector:
+    model_path: str
+    confidence: float
+    iou: float
+    device: str
+    image_size: int
+    manifest: ModelManifest | None
+    model: Any
+    _qr_detector: cv2.QRCodeDetector | None
+
     def __init__(
         self,
-        model_path="models/yolov8n.pt",
-        confidence=0.25,
-        iou=0.45,
-        device="cpu",
-        image_size=640,
-        manifest_path=None,
-    ):
-        self.model_path = model_path
+        model_path: str | Path = "models/yolov8n.pt",
+        confidence: float = 0.25,
+        iou: float = 0.45,
+        device: str = "cpu",
+        image_size: int = 640,
+        manifest_path: str | Path | None = None,
+    ) -> None:
+        self.model_path = str(model_path)
         self.confidence = confidence
         self.iou = iou
         self.device = device
@@ -39,7 +55,7 @@ class Detector:
         self.load_model()
 
     @property
-    def supported_class_names(self):
+    def supported_class_names(self) -> set[str]:
         """Return the exact class names exposed by the loaded model + hybrid CV pipeline."""
         if self.model is None:
             return set()
@@ -49,7 +65,7 @@ class Detector:
         values = names.values() if isinstance(names, dict) else names
         return {str(name) for name in values} | set(HYBRID_PRIVACY_CLASSES)
 
-    def load_model(self):
+    def load_model(self) -> None:
         """
         Tải mô hình YOLOv8 từ đường dẫn cấu hình.
         Nếu không có sẵn tại đường dẫn, Ultralytics sẽ tự tải bản pretrained chính thức từ repo của họ.
@@ -58,7 +74,7 @@ class Detector:
         if model_dir and not os.path.exists(model_dir):
             os.makedirs(model_dir, exist_ok=True)
 
-        safe_print(f"Detector: loading YOLO model from {self.model_path}")
+        logger.info("Detector: loading YOLO model from %s", self.model_path)
         if self.manifest is not None:
             self.manifest.validate_asset(self.model_path)
         self.model = YOLO(self.model_path)
@@ -67,9 +83,11 @@ class Detector:
             runtime_names = set(names.values() if isinstance(names, dict) else names)
             runtime_names |= set(HYBRID_PRIVACY_CLASSES)
             self.manifest.validate_runtime_classes(runtime_names)
-        safe_print("Detector: model loaded")
+        logger.info("Detector: model loaded")
 
-    def detect(self, frame, selected_classes=None):
+    def detect(
+        self, frame: np.ndarray | None, selected_classes: Collection[str] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Chạy phát hiện đối tượng trên một frame ảnh (kết hợp YOLOv8 + OpenCV QR/Card/Document).
         selected_classes: Danh sách tên các class cần lọc. Nếu None, nhận diện tất cả các class.
@@ -87,7 +105,7 @@ class Detector:
             imgsz=self.image_size,
         )
 
-        detections = []
+        detections: list[dict[str, Any]] = []
         if len(results) > 0:
             result = results[0]
             boxes = result.boxes
@@ -112,9 +130,11 @@ class Detector:
         detections.extend(self._detect_qr_and_cards(frame, selected_classes))
         return detections
 
-    def _detect_qr_and_cards(self, frame, selected_classes=None):
+    def _detect_qr_and_cards(
+        self, frame: np.ndarray, selected_classes: Collection[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Phát hiện thời gian thực mã QR và các vật thể dạng thẻ/hóa đơn/tài liệu."""
-        extra = []
+        extra: list[dict[str, Any]] = []
         if not isinstance(frame, np.ndarray) or frame.ndim != 3:
             return extra
         h, w = frame.shape[:2]
@@ -124,7 +144,7 @@ class Detector:
         if not np.any(frame):
             return extra
 
-        def want(cls_name):
+        def want(cls_name: str) -> bool:
             return selected_classes is None or cls_name in selected_classes
 
         # 1. Phát hiện mã QR bằng OpenCV QRCodeDetector
@@ -149,7 +169,7 @@ class Detector:
                                 "bbox": (x1, y1, x2, y2),
                             })
             except Exception:
-                pass
+                logger.warning("Heuristic QR detection failed", exc_info=True)
 
         # 2. Phát hiện vật thể hình chữ nhật cầm tay (id_card, credit_card, receipt, document)
         if any(want(c) for c in ("id_card", "credit_card", "receipt", "document")):
@@ -214,6 +234,6 @@ class Detector:
                                 "bbox": (rx, ry, rx + rw, ry + rh),
                             })
             except Exception:
-                pass
+                logger.warning("Heuristic card/document detection failed", exc_info=True)
 
         return extra

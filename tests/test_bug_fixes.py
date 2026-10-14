@@ -153,6 +153,63 @@ class TestThreadSafeConfig:
         _, _, classes = worker._get_config()
         assert classes == ["cell phone", "id_card"]
 
+    def test_update_config_override_mask_reset_to_none(self):
+        worker = self._make_worker()
+        worker.update_config(override_mask="solid_mask")
+        _, override, _ = worker._get_config()
+        assert override == "solid_mask"
+
+        # Resetting back to Auto (None) must work thanks to _UNSET sentinel
+        worker.update_config(override_mask=None)
+        _, override, _ = worker._get_config()
+        assert override is None
+
+    def test_update_config_preset_fields_and_reset_tracking(self):
+        worker = self._make_worker()
+        worker.pipeline.masker.default_mask_mode = "mosaic"
+        worker.pipeline.masker.expand_ratio = 0.15
+        worker.pipeline.smoothing = SimpleNamespace(hold_frames=5)
+        worker.pipeline.scheduler = SimpleNamespace(enabled=True, skip_ratio=2)
+        reset_calls = []
+        worker.pipeline.reset_tracking = lambda: reset_calls.append(True)
+
+        worker.update_config(
+            default_mask_mode="solid_mask",
+            expand_ratio=0.25,
+            hold_frames=8,
+            scheduler_enabled=False,
+            scheduler_skip_ratio=4,
+            reset_tracking=True,
+        )
+        worker._get_config()
+        assert worker.pipeline.masker.default_mask_mode == "solid_mask"
+        assert worker.pipeline.masker.expand_ratio == pytest.approx(0.25)
+        assert worker.pipeline.smoothing.hold_frames == 8
+        assert worker.pipeline.scheduler.enabled is False
+        assert worker.pipeline.scheduler.skip_ratio == 4
+        assert len(reset_calls) == 1
+
+    def test_demo_video_capture_and_heuristic_card_detection(self):
+        from app.core.detector import Detector
+        from app.ui.camera_worker import DemoVideoCapture
+
+        cap = DemoVideoCapture(width=640, height=480)
+        assert cap.isOpened()
+        ok, frame = cap.read()
+        assert ok is True
+        assert frame is not None
+        assert frame.shape == (480, 640, 3)
+
+        det = Detector.__new__(Detector)
+        det.confidence = 0.25
+        det._qr_detector = None
+        extra = det._detect_qr_and_cards(frame, selected_classes=["id_card", "credit_card", "receipt"])
+        detected_classes = {d["class_name"] for d in extra}
+        assert len(extra) >= 2
+        assert detected_classes & {"id_card", "credit_card", "receipt"}
+        cap.release()
+        assert not cap.isOpened()
+
 
 # =====================================================================
 # Bug 5: Enrollment saves only on dialog accept, not during pose capture
