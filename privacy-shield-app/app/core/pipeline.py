@@ -383,6 +383,19 @@ class PrivacyPipeline:
                     self._last_face_detections = list(face_detections)
                     self._face_cache_valid = True
 
+        # Loại bỏ các phát hiện heuristic (thẻ/giấy tờ) nếu chồng lấp lên vùng khuôn mặt người
+        if detections and getattr(self, "last_face_tracks", None):
+            heuristic_classes = {"id_card", "credit_card", "receipt", "document"}
+            detections = [
+                det
+                for det in detections
+                if det.get("class_name") not in heuristic_classes
+                or not any(
+                    calculate_iou(det["bbox"], trk["bbox"]) > 0.05
+                    for trk in self.last_face_tracks
+                )
+            ]
+
         # Hợp nhất các hộp phát hiện của YOLOv8 và các hộp che khuôn mặt
         all_detections = detections + face_detections
 
