@@ -535,24 +535,33 @@ class MainWindow(QMainWindow):
         else:
             self.card_latency.set_value_color("#fb7185")
 
-        if count > 0:
+        is_shielding = count > 0
+        if is_shielding:
             self.card_objects.set_value_color("#fb7185")
-            self.live_detection_pill.setText(f"SHIELDING ACTIVE · {count} MASKED")
-            self.live_detection_pill.setStyleSheet(
-                "color: #fda4af; background-color: rgba(244, 63, 94, 0.14); "
-                "border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 4px; "
-                "padding: 3px 9px; font-family: 'Cascadia Mono', 'Consolas', monospace; "
-                "font-size: 8pt; font-weight: 700;"
-            )
+            if getattr(self, "_last_pill_count", None) != count:
+                self._last_pill_count = count
+                self.live_detection_pill.setText(f"SHIELDING ACTIVE · {count} MASKED")
+            if getattr(self, "_last_pill_shielding", None) is not True:
+                self._last_pill_shielding = True
+                self.live_detection_pill.setStyleSheet(
+                    "color: #fda4af; background-color: rgba(244, 63, 94, 0.14); "
+                    "border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 4px; "
+                    "padding: 3px 9px; font-family: 'Cascadia Mono', 'Consolas', monospace; "
+                    "font-size: 8pt; font-weight: 700;"
+                )
         else:
             self.card_objects.set_value_color("#9ca3af")
-            self.live_detection_pill.setText("CLEAN STREAM · 0 MASKED")
-            self.live_detection_pill.setStyleSheet(
-                "color: #6b7280; background-color: #181c24; border: 1px solid #242b38; "
-                "border-radius: 4px; padding: 3px 9px; "
-                "font-family: 'Cascadia Mono', 'Consolas', monospace; "
-                "font-size: 8pt; font-weight: 600;"
-            )
+            if getattr(self, "_last_pill_count", None) != 0:
+                self._last_pill_count = 0
+                self.live_detection_pill.setText("CLEAN STREAM · 0 MASKED")
+            if getattr(self, "_last_pill_shielding", None) is not False:
+                self._last_pill_shielding = False
+                self.live_detection_pill.setStyleSheet(
+                    "color: #6b7280; background-color: #181c24; border: 1px solid #242b38; "
+                    "border-radius: 4px; padding: 3px 9px; "
+                    "font-family: 'Cascadia Mono', 'Consolas', monospace; "
+                    "font-size: 8pt; font-weight: 600;"
+                )
 
         state = metrics.get("state", "protected")
         self._update_status_banner(state)
@@ -695,6 +704,9 @@ class MainWindow(QMainWindow):
 
     def _update_status_banner(self, state="protected"):
         """Cập nhật banner trạng thái privacy trên sidebar và đèn tín hiệu monitor."""
+        if getattr(self, "_current_banner_state", None) == state:
+            return
+        self._current_banner_state = state
         states = {
             "protected": (
                 "\u25cf PROTECTED · ACTIVE SHIELD",

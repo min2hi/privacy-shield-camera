@@ -107,6 +107,9 @@ class PrivacyPipeline:
         self.last_time = time.perf_counter()
         self.fps = 0.0
         self.last_face_tracks = []
+        self._last_face_detections: list[dict[str, Any]] = []
+        self._face_cache_valid: bool = False
+        self._last_face_policy: tuple[bool, bool, bool] | None = None
         self._last_effective_classes = None
 
     def reset_tracking(self) -> None:
@@ -114,6 +117,9 @@ class PrivacyPipeline:
         self.scheduler.reset()
         self.smoothing.reset()
         self.last_face_tracks = []
+        self._last_face_detections = []
+        self._face_cache_valid = False
+        self._last_face_policy = None
 
     @staticmethod
     def privacy_screen(
@@ -148,6 +154,184 @@ class PrivacyPipeline:
         )
         return screen
 
+    def detect_and_smooth(
+        self, frame: np.ndarray, selected_classes: Sequence[str] | list[str] | None = None
+    ) -> tuple[list[dict[str, Any]], list[str], float]:
+        """
+        Thực thi suy luận AI (YOLO + Card/QR + YuNet/MobileFaceNet) và làm mịn Temporal Smoothing.
+        Trả về: (smoothed_detections, unsupported_classes, inference_latency_ms)
+        """
+        infer_start = time.perf_counter()
+
+        requested_classes = list(selected_classes or [])
+        supported_classes = self.detector.supported_class_names
+        unsupported_classes = sorted(set(requested_classes) - supported_classes)
+        effective_classes = [name for name in requested_classes if name in supported_classes]
+
+        # Invalidate tracking cache khi danh sách class thay đổi
+        if not hasattr(self, "_last_effective_classes"):
+            self._last_effective_classes = None
+        current_classes_key = tuple(sorted(effective_classes)) if effective_classes else None
+        if current_classes_key != self._last_effective_classes:
+            if self._last_effective_classes is not None:
+                self.reset_tracking()
+            self._last_effective_classes = current_classes_key
+
+        # 1. Quyết định xem có chạy YOLO hay không (Frame Skipping)
+        did_run_object_detect = self.scheduler.should_detect()
+        pre_skip_counter = getattr(self.scheduler, "frame_counter", 0)
+        if did_run_object_detect:
+            detections = self.detector.detect(
+                frame,
+                selected_classes=effective_classes if requested_classes else None,
+            )
+            self.scheduler.update_detections(detections)
+        else:
+            detections = self.scheduler.get_last_detections()
+            self.scheduler.skip_frame()
+
+        # 2. Xử lý nhận diện khuôn mặt nâng cao (Interleaved Scheduling + Face Tracking)
+        face_detections: list[dict[str, Any]] = []
+        if self.face_rec_enabled:
+            reg_embs = getattr(self.face_recognizer, "registered_embeddings", None)
+            has_registered = bool(reg_embs and any(e is not None for e in reg_embs))
+            face_policy = (
+                has_registered,
+                bool(self.mask_owner_face),
+                bool(self.mask_strangers_face),
+            )
+            if getattr(self, "_last_face_policy", None) != face_policy:
+                self._last_face_policy = face_policy
+                self._face_cache_valid = False
+                self._last_face_detections = []
+
+            # Chỉ chạy nhận diện khuôn mặt khi có ít nhất 1 quy tắc che mặt có hiệu lực
+            need_face_pipeline = (has_registered and self.mask_owner_face) or self.mask_strangers_face
+            if not need_face_pipeline:
+                self.last_face_tracks = []
+                self._last_face_detections = []
+                self._face_cache_valid = True
+            else:
+                scheduler_active = bool(getattr(self.scheduler, "enabled", False)) and (
+                    getattr(self.scheduler, "skip_ratio", 1) >= 2
+                )
+                face_cache_valid = getattr(self, "_face_cache_valid", False)
+
+                # Xen kẽ: nếu frame này vừa chạy YOLO và đã có cache mặt hợp lệ -> dùng lại cache mặt;
+                # chạy YuNet ở frame nghỉ của YOLO (pre_skip_counter == 1) để san phẳng thời gian frame.
+                should_run_face_detect = (
+                    not scheduler_active
+                    or not face_cache_valid
+                    or (not did_run_object_detect and pre_skip_counter == 1)
+                )
+
+                if not should_run_face_detect:
+                    face_detections = list(getattr(self, "_last_face_detections", []))
+                else:
+                    faces = self.face_recognizer.detect_faces(frame)
+                    current_face_tracks = []
+
+                    for face in faces:
+                        xmin, ymin, w, h = face["bbox"]
+                        x2 = xmin + w
+                        y2 = ymin + h
+                        bbox = (xmin, ymin, x2, y2)
+
+                        # 2.1 So sánh với các khuôn mặt ở frame trước bằng IoU
+                        best_match = None
+                        best_iou = 0.0
+                        for track in self.last_face_tracks:
+                            iou = calculate_iou(bbox, track["bbox"])
+                            if iou > best_iou:
+                                best_iou = iou
+                                best_match = track
+
+                        is_matched = False
+                        if (
+                            best_match is not None
+                            and best_iou > 0.40
+                            and best_match["frames_since_update"] < 24
+                        ):
+                            is_matched = best_match["is_matched"]
+                            frames_since_update = best_match["frames_since_update"] + 1
+                        else:
+                            # Chỉ chạy MobileFaceNet khi đã đăng ký mặt mẫu và cần phân biệt chủ/lạ
+                            if has_registered:
+                                face_crop = frame[ymin:y2, xmin:x2]
+                                if face_crop.size > 0:
+                                    embedding = self.face_recognizer.extract_embedding(face_crop)
+                                    is_matched, _ = self.face_recognizer.verify_face(embedding)
+                            frames_since_update = 0
+
+                        current_face_tracks.append({
+                            "bbox": bbox,
+                            "is_matched": is_matched,
+                            "frames_since_update": frames_since_update,
+                        })
+
+                        # 2.2 Áp dụng quyết định che phủ (Fail-Closed Privacy)
+                        should_mask = False
+                        mask_mode = "gaussian_blur"
+
+                        if is_matched:
+                            if self.mask_owner_face:
+                                should_mask = True
+                                mask_mode = "gaussian_blur"
+                        else:
+                            if self.mask_strangers_face:
+                                should_mask = True
+                                mask_mode = "mosaic"
+                            elif self.mask_owner_face and has_registered:
+                                should_mask = True
+                                mask_mode = "gaussian_blur"
+
+                        if should_mask:
+                            face_detections.append({
+                                "class_name": "face",
+                                "bbox": bbox,
+                                "confidence": 1.0,
+                                "mask_mode": mask_mode,
+                            })
+
+                    self.last_face_tracks = current_face_tracks
+                    self._last_face_detections = list(face_detections)
+                    self._face_cache_valid = True
+
+        # Hợp nhất các hộp phát hiện của YOLOv8 và các hộp che khuôn mặt
+        all_detections = detections + face_detections
+
+        # 3. Áp dụng Temporal Smoothing chống nhấp nháy
+        smoothed_detections = self.smoothing.update(all_detections)
+        infer_latency = (time.perf_counter() - infer_start) * 1000.0
+        return smoothed_detections, unsupported_classes, infer_latency
+
+    def render_masked_frame(
+        self,
+        frame: np.ndarray,
+        smoothed_detections: list[dict[str, Any]],
+        unsupported_classes: list[str],
+        latency_ms: float,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Áp dụng mặt nạ che phủ siêu tốc (~0.3ms) lên frame hiện tại và tính toán FPS."""
+        processed_frame = self.masker.apply_masks(frame, smoothed_detections)
+
+        curr_time = time.perf_counter()
+        time_diff = curr_time - self.last_time
+        self.last_time = curr_time
+        if time_diff > 0:
+            instant_fps = 1.0 / time_diff
+            self.fps = 0.85 * self.fps + 0.15 * instant_fps if self.fps > 0 else instant_fps
+
+        metrics = {
+            "fps": round(self.fps, 1),
+            "latency_ms": round(latency_ms, 1),
+            "detected_count": len(smoothed_detections),
+            "detections": smoothed_detections,
+            "unsupported_classes": unsupported_classes,
+            "state": "protected",
+        }
+        return processed_frame, metrics
+
     def process_frame(
         self, frame: np.ndarray, selected_classes: Sequence[str] | list[str] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
@@ -156,125 +340,14 @@ class PrivacyPipeline:
         Trả về: (processed_frame, metrics)
         """
         start_time = time.perf_counter()
-        
+
         try:
-            requested_classes = list(selected_classes or [])
-            supported_classes = self.detector.supported_class_names
-            unsupported_classes = sorted(set(requested_classes) - supported_classes)
-            effective_classes = [name for name in requested_classes if name in supported_classes]
-
-            # Invalidate tracking cache khi danh sách class thay đổi
-            if not hasattr(self, '_last_effective_classes'):
-                self._last_effective_classes = None
-            current_classes_key = tuple(sorted(effective_classes)) if effective_classes else None
-            if current_classes_key != self._last_effective_classes:
-                if self._last_effective_classes is not None:
-                    self.reset_tracking()
-                self._last_effective_classes = current_classes_key
-
-            # 1. Quyết định xem có chạy YOLO hay không (Frame Skipping)
-            if self.scheduler.should_detect():
-                # Chạy detect thực tế
-                detections = self.detector.detect(
-                    frame,
-                    selected_classes=effective_classes if requested_classes else None,
-                )
-                self.scheduler.update_detections(detections)
-            else:
-                # Tái sử dụng bbox cũ
-                detections = self.scheduler.get_last_detections()
-                self.scheduler.skip_frame()
-
-            # 2. Xử lý nhận diện khuôn mặt nâng cao (Tối ưu hóa hiệu năng bằng Face Tracking)
-            face_detections = []
-            if self.face_rec_enabled:
-                faces = self.face_recognizer.detect_faces(frame)
-                current_face_tracks = []
-                
-                for face in faces:
-                    xmin, ymin, w, h = face["bbox"]
-                    x2 = xmin + w
-                    y2 = ymin + h
-                    bbox = (xmin, ymin, x2, y2)
-                    
-                    # 2.1 So sánh với các khuôn mặt ở frame trước bằng IoU
-                    best_match = None
-                    best_iou = 0.0
-                    for track in self.last_face_tracks:
-                        iou = calculate_iou(bbox, track["bbox"])
-                        if iou > best_iou:
-                            best_iou = iou
-                            best_match = track
-                            
-                    is_matched = False
-                    # Nếu tìm thấy vết khuôn mặt cũ trùng khớp cao (IoU > 0.45), tái sử dụng trạng thái
-                    if best_match is not None and best_iou > 0.45 and best_match["frames_since_update"] < 15:
-                        is_matched = best_match["is_matched"]
-                        frames_since_update = best_match["frames_since_update"] + 1
-                    else:
-                        # Chỉ chạy trích xuất embedding qua ONNX khi khuôn mặt mới xuất hiện hoặc định kỳ
-                        face_crop = frame[ymin:y2, xmin:x2]
-                        if face_crop.size > 0:
-                            embedding = self.face_recognizer.extract_embedding(face_crop)
-                            is_matched = False
-                            if hasattr(self.face_recognizer, 'registered_embeddings') and self.face_recognizer.registered_embeddings:
-                                is_matched, dist = self.face_recognizer.verify_face(embedding)
-                        frames_since_update = 0
-                        
-                    # Lưu thông tin theo dõi cho frame kế tiếp
-                    current_face_tracks.append({
-                        "bbox": bbox,
-                        "is_matched": is_matched,
-                        "frames_since_update": frames_since_update
-                    })
-                    
-                    # 2.2 Áp dụng quyết định che phủ (Fail-Closed Privacy)
-                    should_mask = False
-                    mask_mode = "gaussian_blur"
-                    has_registered = (
-                        hasattr(self.face_recognizer, 'registered_embeddings')
-                        and self.face_recognizer.registered_embeddings
-                    )
-                    
-                    if is_matched:
-                        # Xác nhận là chủ sở hữu
-                        if self.mask_owner_face:
-                            should_mask = True
-                            mask_mode = "gaussian_blur"
-                    else:
-                        # Không khớp: có thể là người lạ HOẶC chủ sở hữu bị nhận sai
-                        if self.mask_strangers_face:
-                            should_mask = True
-                            mask_mode = "mosaic"
-                        elif self.mask_owner_face and has_registered:
-                            # Fail-closed: nếu đã đăng ký mặt chủ và muốn che chủ,
-                            # thì mặt không xác minh được cũng phải che (có thể là chủ bị false negative)
-                            should_mask = True
-                            mask_mode = "gaussian_blur"
-                        
-                    if should_mask:
-                        face_detections.append({
-                            "class_name": "face",
-                            "bbox": bbox,
-                            "confidence": 1.0,
-                            "mask_mode": mask_mode
-                        })
-                
-                self.last_face_tracks = current_face_tracks
-            
-            # Hợp nhất các hộp phát hiện của YOLOv8 và các hộp che khuôn mặt
-            all_detections = detections + face_detections
-
-            # 3. Áp dụng Temporal Smoothing chống nhấp nháy
-            smoothed_detections = self.smoothing.update(all_detections)
-
-            # 3. Áp dụng che (Masking) dựa trên mức rủi ro đối tượng
+            smoothed_detections, unsupported_classes, _ = self.detect_and_smooth(
+                frame, selected_classes=selected_classes
+            )
             processed_frame = self.masker.apply_masks(frame, smoothed_detections)
-
-            # 4. Tính toán thông số hiệu năng
             latency = (time.perf_counter() - start_time) * 1000.0
-            
-            # Tính FPS trung bình trượt (Moving Average FPS)
+
             curr_time = time.perf_counter()
             time_diff = curr_time - self.last_time
             self.last_time = curr_time
@@ -290,12 +363,11 @@ class PrivacyPipeline:
                 "unsupported_classes": unsupported_classes,
                 "state": "protected",
             }
-
             return processed_frame, metrics
 
         except Exception as e:
             logger.error("PrivacyPipeline error: %s", e, exc_info=True)
-            
+
             # Cơ chế Fail-safe: Nếu bật, xuất màn hình đen kèm thông báo thay vì video thô
             if self.fail_safe:
                 black_frame = self.privacy_screen(frame, "PIPELINE ERROR - SAFE MODE ACTIVE")
