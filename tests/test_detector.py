@@ -87,3 +87,27 @@ def test_supported_class_names():
     names = det.supported_class_names
     assert "cell phone" in names
     assert "person" in names
+
+
+def test_heuristic_card_detects_card_and_rejects_skin_and_border_blobs():
+    import cv2
+
+    det = make_detector_with_fake_model()
+
+    # 1. Valid card in center with printed text lines -> detected as id_card
+    card_frame = np.full((480, 640, 3), 60, dtype=np.uint8)
+    cv2.rectangle(card_frame, (200, 180), (420, 320), (235, 238, 240), -1)
+    for y in range(210, 300, 18):
+        cv2.line(card_frame, (230, y), (390, y), (40, 40, 40), 2)
+    card_res = det._detect_qr_and_cards(card_frame, selected_classes=["id_card"])
+    assert len(card_res) == 1
+    assert card_res[0]["class_name"] == "id_card"
+
+    # 2. Vertical blob touching top/bottom frame border or containing skin tone -> rejected
+    person_frame = np.full((480, 640, 3), 60, dtype=np.uint8)
+    cv2.rectangle(person_frame, (180, 0), (440, 480), (140, 165, 215), -1)  # BGR skin tone touching border
+    person_res = det._detect_qr_and_cards(
+        person_frame, selected_classes=["id_card", "credit_card", "receipt", "document"]
+    )
+    assert person_res == []
+
