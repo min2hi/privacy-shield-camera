@@ -204,6 +204,10 @@ class PrivacyPipeline:
                 self._last_face_policy = face_policy
                 self._face_cache_valid = False
                 self._last_face_detections = []
+                if hasattr(self, "smoothing") and hasattr(self.smoothing, "active_boxes"):
+                    self.smoothing.active_boxes = [
+                        b for b in self.smoothing.active_boxes if b.get("class_name") != "face"
+                    ]
 
             # Chỉ chạy nhận diện khuôn mặt khi có ít nhất 1 quy tắc che mặt có hiệu lực
             need_face_pipeline = (has_registered and self.mask_owner_face) or self.mask_strangers_face
@@ -257,10 +261,16 @@ class PrivacyPipeline:
                         dist = 999.0
                         verify_failed = False
 
+                        # Chỉ giữ cache dài (10 chu kỳ) cho mặt đã xác nhận là Chủ sở hữu;
+                        # với mặt chưa khớp (is_matched=False), xác thực lại sau mỗi 1 chu kỳ để nhận diện chủ nhân tức thì.
+                        max_track_ttl = (
+                            10 if (best_match is not None and best_match.get("is_matched")) else 1
+                        )
+
                         if (
                             best_match is not None
                             and best_iou > 0.45
-                            and best_match["frames_since_update"] < 15
+                            and best_match["frames_since_update"] < max_track_ttl
                             and not best_match.get("verify_failed", False)
                         ):
                             used_track_indices.add(best_match_idx)
@@ -268,25 +278,53 @@ class PrivacyPipeline:
                             dist = float(best_match.get("dist", 999.0))
                             frames_since_update = best_match["frames_since_update"] + 1
                         else:
+                            if best_match is not None and best_iou > 0.40:
+                                used_track_indices.add(best_match_idx)
                             # Chỉ chạy MobileFaceNet khi đã đăng ký mặt mẫu và cần phân biệt chủ/lạ
                             if has_registered:
-                                face_crop = frame[ymin:y2, xmin:x2]
-                                if face_crop.size == 0:
-                                    verify_failed = True
+                                if hasattr(self.face_recognizer, "verify_face_region"):
+                                    is_matched, dist, verify_failed = (
+                                        self.face_recognizer.verify_face_region(frame, face)
+                                    )
                                 else:
-                                    try:
-                                        embedding = self.face_recognizer.extract_embedding(face_crop)
-                                        if embedding is None:
-                                            verify_failed = True
-                                        else:
-                                            is_matched, dist = self.face_recognizer.verify_face(
-                                                embedding
-                                            )
-                                    except Exception as exc:
-                                        logger.warning(
-                                            "Face verification error (fail-closed): %s", exc
-                                        )
+                                    face_crop = frame[ymin:y2, xmin:x2]
+                                    if face_crop.size == 0:
                                         verify_failed = True
+                                    else:
+                                        try:
+                                            embedding = self.face_recognizer.extract_embedding(
+                                                face_crop
+                                            )
+                                            if embedding is None:
+                                                verify_failed = True
+                                            else:
+                                                is_matched, dist = (
+                                                    self.face_recognizer.verify_face(embedding)
+                                                )
+                                        except Exception as exc:
+                                            logger.warning(
+                                                "Face verification error (fail-closed): %s", exc
+                                            )
+                                            verify_failed = True
+
+                                # Làm mịn khoảng cách EMA + Hysteresis chống nhấp nháy cho track của Chủ sở hữu
+                                if (
+                                    not verify_failed
+                                    and best_match is not None
+                                    and best_iou > 0.40
+                                ):
+                                    prev_dist = float(best_match.get("dist", 999.0))
+                                    if prev_dist < 500.0:
+                                        dist = 0.40 * prev_dist + 0.60 * dist
+                                    thresh = float(
+                                        getattr(self.face_recognizer, "threshold", 1.15)
+                                    )
+                                    if best_match.get("is_matched", False) and dist < (
+                                        thresh + 0.08
+                                    ):
+                                        is_matched = True
+                                    elif dist < thresh:
+                                        is_matched = True
                             frames_since_update = 0
 
                         current_face_tracks.append({

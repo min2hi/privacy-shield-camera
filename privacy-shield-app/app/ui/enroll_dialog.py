@@ -26,6 +26,9 @@ class FaceEnrollmentDialog(QDialog):
                 lock = getattr(fr, "_get_lock", lambda: None)() or nullcontext()
                 with lock:
                     self._backup_embeddings = list(fr.registered_embeddings)  # shallow copy
+                    fr.registered_embeddings = []
+                    fr._aligned_pose_embeddings = {}
+                    fr._gallery_cache_key = None
 
         self.setWindowTitle("Biometric Enrollment · Đăng Ký Khuôn Mặt Mẫu")
         self.setFixedSize(520, 370)
@@ -275,8 +278,19 @@ class FaceEnrollmentDialog(QDialog):
                 self.current_step += 1
                 self.update_step_ui()
             else:
+                if hasattr(self.worker, "pipeline") and hasattr(
+                    self.worker.pipeline, "face_recognizer"
+                ):
+                    self.worker.pipeline.face_recognizer.save_registered_faces()
+                    p_lock = getattr(self.worker, "_pipeline_lock", None) or nullcontext()
+                    with p_lock:
+                        if hasattr(self.worker.pipeline, "reset_tracking"):
+                            self.worker.pipeline.reset_tracking()
+                    i_lock = getattr(self.worker, "_infer_lock", None) or nullcontext()
+                    with i_lock:
+                        self.worker._async_state = None
                 self.instruction_lbl.setText(
-                    "HOÀN TẤT — Đã trích xuất đủ 3 góc khuôn mặt mẫu. Nhấn HOÀN THÀNH để lưu mã hóa."
+                    "HOÀN TẤT — Đã trích xuất và lưu mã hóa đủ 3 góc khuôn mặt mẫu. Nhấn HOÀN THÀNH để đóng."
                 )
                 self.instruction_lbl.setStyleSheet(
                     "color: #34d399; font-weight: 700; border: none; background: transparent;"
@@ -305,10 +319,15 @@ class FaceEnrollmentDialog(QDialog):
                 f_lock = getattr(fr, "_get_lock", lambda: None)() or nullcontext()
                 with f_lock:
                     fr.registered_embeddings = self._backup_embeddings
+                    fr._aligned_pose_embeddings = {}
+                    fr._gallery_cache_key = None
                 p_lock = getattr(self.worker, "_pipeline_lock", None) or nullcontext()
                 with p_lock:
                     if hasattr(self.worker.pipeline, "reset_tracking"):
                         self.worker.pipeline.reset_tracking()
+                i_lock = getattr(self.worker, "_infer_lock", None) or nullcontext()
+                with i_lock:
+                    self.worker._async_state = None
         super().reject()
 
     def accept(self):
@@ -324,5 +343,8 @@ class FaceEnrollmentDialog(QDialog):
             with p_lock:
                 if hasattr(self.worker.pipeline, "reset_tracking"):
                     self.worker.pipeline.reset_tracking()
+            i_lock = getattr(self.worker, "_infer_lock", None) or nullcontext()
+            with i_lock:
+                self.worker._async_state = None
         super().accept()
 
