@@ -62,7 +62,7 @@ class FaceRecognizer:
             model=str(self.detector_path),
             config="",
             input_size=(320, 320),
-            score_threshold=0.6,
+            score_threshold=0.45,
             nms_threshold=0.3,
             top_k=50
         )
@@ -231,8 +231,8 @@ class FaceRecognizer:
 
         h, w = frame.shape[:2]
         max_dim = max(w, h)
-        if max_dim > 320:
-            scale = 320.0 / float(max_dim)
+        if max_dim > 416:
+            scale = 416.0 / float(max_dim)
             det_w = max(16, int(round(w * scale)))
             det_h = max(16, int(round(h * scale)))
             det_frame = cv2.resize(frame, (det_w, det_h), interpolation=cv2.INTER_LINEAR)
@@ -603,12 +603,20 @@ class FaceRecognizer:
                     return True, dist_crop, False
 
             face_obj = face.get("face_object")
+            emb_aligned: np.ndarray | None = None
             if face_obj is not None:
                 aligned_img = self.align_face(frame, face_obj)
                 if aligned_img is not None:
                     emb_aligned = self.extract_embedding(aligned_img)
                     if emb_aligned is not None:
                         candidates.append(emb_aligned)
+
+            # Tổ hợp trung bình cầu (Geodesic Fusion) giữa Crop và Aligned để giảm nhiễu góc nghiêng
+            if emb_crop is not None and emb_aligned is not None:
+                fused = emb_crop + emb_aligned
+                fused_norm = float(np.linalg.norm(fused))
+                if fused_norm > 1e-12:
+                    candidates.append((fused / fused_norm).astype(np.float32))
 
             if not candidates:
                 return False, 999.0, True
@@ -620,6 +628,20 @@ class FaceRecognizer:
                 if dist < best_dist:
                     best_dist = dist
                     best_matched = matched
+
+            # Fallback cân bằng sáng cục bộ (CLAHE) khi người dùng ngồi ngược sáng mạnh (trần nhà sáng)
+            if not best_matched and face_crop.shape[0] >= 24 and face_crop.shape[1] >= 24:
+                lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+                l_chan, a_chan, b_chan = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+                l_eq = clahe.apply(l_chan)
+                eq_bgr = cv2.cvtColor(cv2.merge((l_eq, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+                emb_eq = self.extract_embedding(eq_bgr)
+                if emb_eq is not None:
+                    matched_eq, dist_eq = self.verify_face(emb_eq)
+                    if dist_eq < best_dist:
+                        best_dist = dist_eq
+                        best_matched = matched_eq
 
             return best_matched, best_dist, False
         except Exception as exc:

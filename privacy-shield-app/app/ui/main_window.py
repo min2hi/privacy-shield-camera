@@ -824,7 +824,11 @@ class MainWindow(QMainWindow):
         settings = QSettings("PrivacyShield", "PrivacyShieldCamera")
         conf = settings.value("confidence", None)
         if conf is not None:
-            self.conf_slider.setValue(int(conf))
+            conf_val = int(conf)
+            if conf_val > 65:
+                conf_val = 25
+                settings.setValue("confidence", conf_val)
+            self.conf_slider.setValue(conf_val)
         mask_idx = settings.value("mask_mode_index", None)
         if mask_idx is not None:
             self.mask_mode_combo.setCurrentIndex(int(mask_idx))
