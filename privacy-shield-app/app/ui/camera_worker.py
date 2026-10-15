@@ -274,6 +274,24 @@ class CameraWorker(QThread):
                     self.face_delete_result.emit(removed)
                 if pending_face_save:
                     self.pipeline.face_recognizer.save_registered_faces()
+                if any([
+                    pending_owner is not None,
+                    pending_stranger is not None,
+                    pending_face_delete,
+                    pending_face_save,
+                ]):
+                    self.pipeline._face_cache_valid = False
+                    self.pipeline._last_face_detections = []
+                    if hasattr(self.pipeline, "smoothing") and hasattr(
+                        self.pipeline.smoothing, "active_boxes"
+                    ):
+                        self.pipeline.smoothing.active_boxes = [
+                            b
+                            for b in self.pipeline.smoothing.active_boxes
+                            if b.get("class_name") != "face"
+                        ]
+                    with self._infer_lock:
+                        self._async_state = None
 
         if pending_vcam is not None:
             self._apply_vcam_change(pending_vcam)
@@ -441,9 +459,17 @@ class CameraWorker(QThread):
                                             f"Đăng ký thất bại: Phát hiện tư thế {detected_names.get(detected_pose, 'Không xác định')} (Yêu cầu: {pose_names[idx]}). Hãy thực hiện đúng hướng dẫn!",
                                         )
                                 else:
-                                    success = self.pipeline.face_recognizer.register_face_pose(
-                                        frame, best_face["bbox"], self.enroll_pose_index
-                                    )
+                                    try:
+                                        success = self.pipeline.face_recognizer.register_face_pose(
+                                            frame,
+                                            best_face["bbox"],
+                                            self.enroll_pose_index,
+                                            face_object=best_face.get("face_object"),
+                                        )
+                                    except TypeError:
+                                        success = self.pipeline.face_recognizer.register_face_pose(
+                                            frame, best_face["bbox"], self.enroll_pose_index
+                                        )
                                     if success:
                                         idx = self.enroll_pose_index
                                         self.enroll_pose_index = -1
