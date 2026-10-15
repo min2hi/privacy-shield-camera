@@ -90,13 +90,13 @@ def test_face_masking_fail_closed_owner():
     pipeline.last_time = 0.0
     pipeline.fps = 0.0
 
-    # Face recognizer returns 1 face, but verification fails (is_matched = False)
+    # Face recognizer returns 1 face, and embedding extraction fails (returns None)
     mock_recognizer = type(
         "MockFaceRecognizer",
         (),
         {
             "detect_faces": lambda self, f: [{"bbox": (0, 0, 10, 10)}],
-            "extract_embedding": lambda self, crop: np.zeros((128,)),
+            "extract_embedding": lambda self, crop: None,
             "registered_embeddings": [np.ones((128,))],
             "verify_face": lambda self, emb: (False, 1.5),
         },
@@ -108,10 +108,89 @@ def test_face_masking_fail_closed_owner():
     frame = np.zeros((20, 20, 3), dtype=np.uint8)
     _, metrics = pipeline.process_frame(frame)
 
-    # Fail-closed: unverified face masked with gaussian_blur because owner masking requested & registered embeddings present
+    # Fail-closed: extraction error masks face with gaussian_blur when owner masking is active
     assert len(metrics["detections"]) == 1
     assert metrics["detections"][0]["class_name"] == "face"
     assert metrics["detections"][0]["mask_mode"] == "gaussian_blur"
+
+
+def test_owner_only_masking_does_not_mask_stranger_behind():
+    pipeline = PrivacyPipeline.__new__(PrivacyPipeline)
+    pipeline.detector = type("MockDetector", (), {"supported_class_names": set(), "detect": lambda self, f, selected_classes=None: []})()
+    pipeline.scheduler = type("MockScheduler", (), {"should_detect": lambda self: True, "update_detections": lambda self, d: None})()
+    pipeline.face_rec_enabled = True
+    pipeline.last_face_tracks = []
+    pipeline.smoothing = type("MockSmoothing", (), {"update": lambda self, d: d})()
+    pipeline.masker = type("MockMasker", (), {"apply_masks": lambda self, f, d: f})()
+    pipeline.fail_safe = False
+    pipeline.last_time = 0.0
+    pipeline.fps = 0.0
+
+    # Two faces: owner at (0,0,10,10) with mean > 100, stranger behind at (10,10,8,8) with mean == 0
+    mock_recognizer = type(
+        "MockFaceRecognizer",
+        (),
+        {
+            "detect_faces": lambda self, f: [
+                {"bbox": (0, 0, 10, 10)},
+                {"bbox": (10, 10, 8, 8)},
+            ],
+            "extract_embedding": lambda self, crop: np.array([float(crop.mean())]),
+            "registered_embeddings": [np.ones((1,))],
+            "verify_face": lambda self, emb: (True, 0.42) if emb[0] > 100 else (False, 1.38),
+        },
+    )()
+    pipeline.face_recognizer = mock_recognizer
+    pipeline.mask_owner_face = True
+    pipeline.mask_strangers_face = False
+
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    frame[0:10, 0:10] = 200  # Owner crop
+    _, metrics = pipeline.process_frame(frame)
+
+    # Only the owner face is masked; the stranger behind is NOT masked
+    assert len(metrics["detections"]) == 1
+    assert metrics["detections"][0]["bbox"] == (0, 0, 10, 10)
+    assert metrics["detections"][0]["mask_mode"] == "gaussian_blur"
+
+
+def test_single_owner_disambiguation_multi_face():
+    pipeline = PrivacyPipeline.__new__(PrivacyPipeline)
+    pipeline.detector = type("MockDetector", (), {"supported_class_names": set(), "detect": lambda self, f, selected_classes=None: []})()
+    pipeline.scheduler = type("MockScheduler", (), {"should_detect": lambda self: True, "update_detections": lambda self, d: None})()
+    pipeline.face_rec_enabled = True
+    pipeline.last_face_tracks = []
+    pipeline.smoothing = type("MockSmoothing", (), {"update": lambda self, d: d})()
+    pipeline.masker = type("MockMasker", (), {"apply_masks": lambda self, f, d: f})()
+    pipeline.fail_safe = False
+    pipeline.last_time = 0.0
+    pipeline.fps = 0.0
+
+    # Even if two faces both fall under threshold (dist 0.45 vs dist 0.98), only the closest is Owner
+    mock_recognizer = type(
+        "MockFaceRecognizer",
+        (),
+        {
+            "detect_faces": lambda self, f: [
+                {"bbox": (0, 0, 10, 10)},
+                {"bbox": (10, 10, 8, 8)},
+            ],
+            "extract_embedding": lambda self, crop: np.array([float(crop.mean())]),
+            "registered_embeddings": [np.ones((1,))],
+            "verify_face": lambda self, emb: (True, 0.45) if emb[0] > 100 else (True, 0.98),
+        },
+    )()
+    pipeline.face_recognizer = mock_recognizer
+    pipeline.mask_owner_face = True
+    pipeline.mask_strangers_face = False
+
+    frame = np.zeros((20, 20, 3), dtype=np.uint8)
+    frame[0:10, 0:10] = 200
+    _, metrics = pipeline.process_frame(frame)
+
+    assert len(metrics["detections"]) == 1
+    assert metrics["detections"][0]["bbox"] == (0, 0, 10, 10)
+
 
 
 def test_decoupled_detect_and_render_masked_frame():

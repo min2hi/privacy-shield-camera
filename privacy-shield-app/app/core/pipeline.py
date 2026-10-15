@@ -229,7 +229,9 @@ class PrivacyPipeline:
                     face_detections = list(getattr(self, "_last_face_detections", []))
                 else:
                     faces = self.face_recognizer.detect_faces(frame)
-                    current_face_tracks = []
+                    current_face_tracks: list[dict[str, Any]] = []
+                    used_track_indices: set[int] = set()
+                    same_face_count = len(faces) == len(self.last_face_tracks)
 
                     for face in faces:
                         xmin, ymin, w, h = face["bbox"]
@@ -237,51 +239,97 @@ class PrivacyPipeline:
                         y2 = ymin + h
                         bbox = (xmin, ymin, x2, y2)
 
-                        # 2.1 So sánh với các khuôn mặt ở frame trước bằng IoU
+                        # 2.1 So sánh 1-1 với các khuôn mặt ở frame trước bằng IoU
                         best_match = None
+                        best_match_idx = -1
                         best_iou = 0.0
-                        for track in self.last_face_tracks:
-                            iou = calculate_iou(bbox, track["bbox"])
-                            if iou > best_iou:
-                                best_iou = iou
-                                best_match = track
+                        if same_face_count:
+                            for idx, track in enumerate(self.last_face_tracks):
+                                if idx in used_track_indices:
+                                    continue
+                                iou = calculate_iou(bbox, track["bbox"])
+                                if iou > best_iou:
+                                    best_iou = iou
+                                    best_match = track
+                                    best_match_idx = idx
 
                         is_matched = False
+                        dist = 999.0
+                        verify_failed = False
+
                         if (
                             best_match is not None
-                            and best_iou > 0.40
-                            and best_match["frames_since_update"] < 24
+                            and best_iou > 0.45
+                            and best_match["frames_since_update"] < 15
+                            and not best_match.get("verify_failed", False)
                         ):
-                            is_matched = best_match["is_matched"]
+                            used_track_indices.add(best_match_idx)
+                            is_matched = bool(best_match["is_matched"])
+                            dist = float(best_match.get("dist", 999.0))
                             frames_since_update = best_match["frames_since_update"] + 1
                         else:
                             # Chỉ chạy MobileFaceNet khi đã đăng ký mặt mẫu và cần phân biệt chủ/lạ
                             if has_registered:
                                 face_crop = frame[ymin:y2, xmin:x2]
-                                if face_crop.size > 0:
-                                    embedding = self.face_recognizer.extract_embedding(face_crop)
-                                    is_matched, _ = self.face_recognizer.verify_face(embedding)
+                                if face_crop.size == 0:
+                                    verify_failed = True
+                                else:
+                                    try:
+                                        embedding = self.face_recognizer.extract_embedding(face_crop)
+                                        if embedding is None:
+                                            verify_failed = True
+                                        else:
+                                            is_matched, dist = self.face_recognizer.verify_face(
+                                                embedding
+                                            )
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "Face verification error (fail-closed): %s", exc
+                                        )
+                                        verify_failed = True
                             frames_since_update = 0
 
                         current_face_tracks.append({
                             "bbox": bbox,
                             "is_matched": is_matched,
+                            "dist": dist,
+                            "verify_failed": verify_failed,
                             "frames_since_update": frames_since_update,
                         })
 
-                        # 2.2 Áp dụng quyết định che phủ (Fail-Closed Privacy)
+                    # 2.2 Khử nhập nhằng đa khuôn mặt: trong cùng 1 khung hình chỉ có tối đa 1 Chủ sở hữu
+                    # (khuôn mặt có khoảng cách Euclidean nhỏ nhất đạt ngưỡng). Các khuôn mặt còn lại là Người lạ.
+                    matched_indices = [
+                        idx for idx, trk in enumerate(current_face_tracks) if trk["is_matched"]
+                    ]
+                    if len(matched_indices) > 1:
+                        best_owner_idx = min(
+                            matched_indices, key=lambda idx: current_face_tracks[idx]["dist"]
+                        )
+                        for idx in matched_indices:
+                            if idx != best_owner_idx:
+                                current_face_tracks[idx]["is_matched"] = False
+
+                    # 2.3 Áp dụng quyết định che phủ chuẩn xác cho từng khuôn mặt
+                    for track in current_face_tracks:
+                        bbox = track["bbox"]
+                        is_matched = track["is_matched"]
+                        verify_failed = track["verify_failed"]
                         should_mask = False
                         mask_mode = "gaussian_blur"
 
                         if is_matched:
+                            # Khuôn mặt khớp với Chủ sở hữu
                             if self.mask_owner_face:
                                 should_mask = True
                                 mask_mode = "gaussian_blur"
                         else:
+                            # Khuôn mặt KHÔNG khớp Chủ sở hữu (Người lạ) hoặc lỗi trích xuất
                             if self.mask_strangers_face:
                                 should_mask = True
                                 mask_mode = "mosaic"
-                            elif self.mask_owner_face and has_registered:
+                            elif verify_failed and self.mask_owner_face and has_registered:
+                                # Fail-Closed chỉ kích hoạt khi lỗi trích xuất/xác thực, KHÔNG che nhầm người lạ
                                 should_mask = True
                                 mask_mode = "gaussian_blur"
 

@@ -305,6 +305,10 @@ class FaceEnrollmentDialog(QDialog):
                 f_lock = getattr(fr, "_get_lock", lambda: None)() or nullcontext()
                 with f_lock:
                     fr.registered_embeddings = self._backup_embeddings
+                p_lock = getattr(self.worker, "_pipeline_lock", None) or nullcontext()
+                with p_lock:
+                    if hasattr(self.worker.pipeline, "reset_tracking"):
+                        self.worker.pipeline.reset_tracking()
         super().reject()
 
     def accept(self):
@@ -316,4 +320,9 @@ class FaceEnrollmentDialog(QDialog):
             saved = self.worker.pipeline.face_recognizer.save_registered_faces()
             if saved:
                 logger.info("EnrollDialog: face templates saved to disk on user confirmation")
+            p_lock = getattr(self.worker, "_pipeline_lock", None) or nullcontext()
+            with p_lock:
+                if hasattr(self.worker.pipeline, "reset_tracking"):
+                    self.worker.pipeline.reset_tracking()
         super().accept()
+
