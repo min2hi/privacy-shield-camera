@@ -261,15 +261,15 @@ class PrivacyPipeline:
                         dist = 999.0
                         verify_failed = False
 
-                        # Chỉ giữ cache dài (10 chu kỳ) cho mặt đã xác nhận là Chủ sở hữu;
-                        # với mặt chưa khớp (is_matched=False), xác thực lại sau mỗi 1 chu kỳ để nhận diện chủ nhân tức thì.
+                        # Chỉ giữ cache (8 chu kỳ) cho mặt đã xác nhận là Chủ sở hữu;
+                        # với mặt chưa khớp (is_matched=False), xác thực lại ngay ở mỗi chu kỳ (ttl=0) để bắt dính chủ nhân tức thì.
                         max_track_ttl = (
-                            10 if (best_match is not None and best_match.get("is_matched")) else 1
+                            8 if (best_match is not None and best_match.get("is_matched")) else 0
                         )
 
                         if (
                             best_match is not None
-                            and best_iou > 0.45
+                            and best_iou > 0.35
                             and best_match["frames_since_update"] < max_track_ttl
                             and not best_match.get("verify_failed", False)
                         ):
@@ -278,7 +278,7 @@ class PrivacyPipeline:
                             dist = float(best_match.get("dist", 999.0))
                             frames_since_update = best_match["frames_since_update"] + 1
                         else:
-                            if best_match is not None and best_iou > 0.40:
+                            if best_match is not None and best_iou > 0.35:
                                 used_track_indices.add(best_match_idx)
                             # Chỉ chạy MobileFaceNet khi đã đăng ký mặt mẫu và cần phân biệt chủ/lạ
                             if has_registered:

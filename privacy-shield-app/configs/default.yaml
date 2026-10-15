@@ -69,6 +69,6 @@ face_recognition:
   enabled: true
   model_dir: "models"
   template_path: "configs/registered_face.npy"
-  threshold: 1.10            # Ngưỡng khoảng cách Euclidean (Chuẩn MobileFaceNet L2: 1.05 - 1.15. Dưới 1.05 sẽ rất khó nhận diện nếu đổi góc mặt)
+  threshold: 1.15            # Ngưỡng khoảng cách Euclidean (Chuẩn MobileFaceNet L2: 1.05 - 1.15. Dưới 1.05 sẽ rất khó nhận diện nếu đổi góc mặt)
   mask_owner: true           # Tự động che khuôn mặt chủ sở hữu nếu phát hiện khớp mẫu
   mask_stranger: false       # Tự động che khuôn mặt người lạ (những khuôn mặt không khớp mẫu)

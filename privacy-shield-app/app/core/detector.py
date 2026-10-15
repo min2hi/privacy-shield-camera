@@ -202,19 +202,32 @@ class Detector:
                     if qr_det is None:
                         qr_det = cv2.QRCodeDetector()
                         self._qr_detector = qr_det
-                    decoded_text, points, _ = qr_det.detectAndDecode(small_gray)
-                    if points is not None and decoded_text:
+                    ok, points = qr_det.detect(small_gray)
+                    if ok and points is not None:
                         pts_arr = np.array(points, dtype=np.float32).reshape(-1, 2)
-                        x1 = int(np.clip(np.min(pts_arr[:, 0]) * inv_scale_x, 0, w - 1))
-                        y1 = int(np.clip(np.min(pts_arr[:, 1]) * inv_scale_y, 0, h - 1))
-                        x2 = int(np.clip(np.max(pts_arr[:, 0]) * inv_scale_x, 0, w - 1))
-                        y2 = int(np.clip(np.max(pts_arr[:, 1]) * inv_scale_y, 0, h - 1))
-                        if x2 - x1 >= 20 and y2 - y1 >= 20:
-                            qr_found.append({
-                                "class_name": "qr_code",
-                                "confidence": 0.95,
-                                "bbox": (x1, y1, x2, y2),
-                            })
+                        qx1 = int(np.clip(np.min(pts_arr[:, 0]), 0, sw - 1))
+                        qy1 = int(np.clip(np.min(pts_arr[:, 1]), 0, sh - 1))
+                        qx2 = int(np.clip(np.max(pts_arr[:, 0]), 0, sw - 1))
+                        qy2 = int(np.clip(np.max(pts_arr[:, 1]), 0, sh - 1))
+                        qw = qx2 - qx1
+                        qh = qy2 - qy1
+                        if (
+                            qw >= 16
+                            and qh >= 16
+                            and 0.55 <= (float(qw) / float(qh)) <= 1.80
+                            and (qw * qh) < (sw * sh * 0.30)
+                        ):
+                            qr_roi = small_gray[qy1:qy2, qx1:qx2]
+                            if qr_roi.size > 0 and float(np.std(qr_roi)) >= 28.0:
+                                x1 = int(np.clip(qx1 * inv_scale_x, 0, w - 1))
+                                y1 = int(np.clip(qy1 * inv_scale_y, 0, h - 1))
+                                x2 = int(np.clip(qx2 * inv_scale_x, 0, w - 1))
+                                y2 = int(np.clip(qy2 * inv_scale_y, 0, h - 1))
+                                qr_found.append({
+                                    "class_name": "qr_code",
+                                    "confidence": 0.96,
+                                    "bbox": (x1, y1, x2, y2),
+                                })
                 except Exception:
                     logger.warning("Heuristic QR detection failed", exc_info=True)
                 self._last_qr_detections = qr_found
@@ -223,32 +236,32 @@ class Detector:
                 extra.extend(getattr(self, "_last_qr_detections", []))
 
         # 2. Phát hiện vật thể hình chữ nhật cầm tay (id_card, credit_card, receipt, document)
-        # Yêu cầu hình học nghiêm ngặt (Tứ giác lồi 4 đỉnh vuông góc ~90°, cách biên khung hình,
-        # bề mặt phẳng đồng nhất, không chứa vùng da mặt người) để tuyệt đối không nhận nhầm người/tường/trần nhà.
+        # Cân bằng độ nhạy khi cầm nghiêng trên tay (cho phép góc phối cảnh 3D nhẹ) nhưng vẫn
+        # chặn tuyệt đối các đường viền chạm biên màn hình hoặc chứa sắc tố da mặt người.
         if want_cards:
             try:
                 blurred = cv2.GaussianBlur(small_gray, (5, 5), 0)
-                edges = cv2.Canny(blurred, 65, 175)
+                edges = cv2.Canny(blurred, 50, 155)
                 k_size = 3 if scale < 1.0 else 5
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
                 closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
                 contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
                 frame_area = float(sw * sh)
-                min_w = max(24, int(55 * scale))
-                min_h = max(18, int(38 * scale))
-                margin_x = max(5, int(sw * 0.02))
-                margin_y = max(5, int(sh * 0.02))
+                min_w = max(20, int(48 * scale))
+                min_h = max(15, int(32 * scale))
+                margin_x = max(4, int(sw * 0.015))
+                margin_y = max(4, int(sh * 0.015))
 
                 for cnt in contours:
                     area = cv2.contourArea(cnt)
-                    # Thẻ/giấy tờ cầm tay chỉ chiếm từ 2.2% đến 28% diện tích khung hình
-                    if area < frame_area * 0.022 or area > frame_area * 0.28:
+                    # Thẻ/giấy tờ cầm tay chiếm từ 1.6% đến 34% diện tích khung hình
+                    if area < frame_area * 0.016 or area > frame_area * 0.34:
                         continue
                     peri = cv2.arcLength(cnt, True)
-                    approx = cv2.approxPolyDP(cnt, 0.025 * peri, True)
-                    # Bắt buộc phải là tứ giác lồi đúng 4 đỉnh
-                    if len(approx) != 4 or not cv2.isContourConvex(approx):
+                    approx = cv2.approxPolyDP(cnt, 0.030 * peri, True)
+                    # Cho phép 4-5 đỉnh lồi (khi ngón tay cầm che nhẹ 1 góc thẻ)
+                    if not (4 <= len(approx) <= 5) or not cv2.isContourConvex(approx):
                         continue
 
                     rx, ry, rw, rh = cv2.boundingRect(approx)
@@ -263,41 +276,42 @@ class Detector:
                     ):
                         continue
 
-                    # Kiểm tra độ lấp đầy hình chữ nhật tối thiểu (minAreaRect) và 4 góc ~90°
+                    # Kiểm tra độ lấp đầy hình chữ nhật xoay (minAreaRect)
                     (_, _), (maw, mah), _ = cv2.minAreaRect(cnt)
                     min_rect_area = float(maw * mah)
-                    if min_rect_area <= 0 or (area / min_rect_area) < 0.88:
+                    if min_rect_area <= 0 or (area / min_rect_area) < 0.78:
                         continue
                     rect_fill = area / float(rw * rh)
-                    if rect_fill < 0.78:
+                    if rect_fill < 0.68:
                         continue
 
-                    pts = approx.reshape(4, 2).astype(np.float32)
-                    max_cos = 0.0
-                    for i in range(4):
-                        p0 = pts[i]
-                        p1 = pts[(i + 1) % 4]
-                        p2 = pts[(i + 2) % 4]
-                        v1 = p0 - p1
-                        v2 = p2 - p1
-                        denom = float(np.linalg.norm(v1) * np.linalg.norm(v2)) + 1e-6
-                        cos_angle = abs(float(np.dot(v1, v2)) / denom)
-                        if cos_angle > max_cos:
-                            max_cos = cos_angle
-                    # Góc giữa các cạnh của thẻ/trang giấy phải xấp xỉ 90° (|cos| <= 0.18)
-                    if max_cos > 0.18:
-                        continue
+                    if len(approx) == 4:
+                        pts = approx.reshape(4, 2).astype(np.float32)
+                        max_cos = 0.0
+                        for i in range(4):
+                            p0 = pts[i]
+                            p1 = pts[(i + 1) % 4]
+                            p2 = pts[(i + 2) % 4]
+                            v1 = p0 - p1
+                            v2 = p2 - p1
+                            denom = float(np.linalg.norm(v1) * np.linalg.norm(v2)) + 1e-6
+                            cos_angle = abs(float(np.dot(v1, v2)) / denom)
+                            if cos_angle > max_cos:
+                                max_cos = cos_angle
+                        # Cho phép góc nghiêng phối cảnh 3D khi cầm thẻ trên tay (|cos| <= 0.32 ~ 90°±18°)
+                        if max_cos > 0.32:
+                            continue
 
                     # Kiểm tra mật độ nét chữ/chi tiết bên trong lòng thẻ (tránh nhận nhầm mảng tường trắng trơn)
-                    pad_x = max(2, int(rw * 0.15))
-                    pad_y = max(2, int(rh * 0.15))
+                    pad_x = max(2, int(rw * 0.14))
+                    pad_y = max(2, int(rh * 0.14))
                     inner_edges = edges[ry + pad_y : ry + rh - pad_y, rx + pad_x : rx + rw - pad_x]
                     if inner_edges.size == 0:
                         continue
                     inner_edge_density = float(np.count_nonzero(inner_edges)) / float(
                         inner_edges.size
                     )
-                    if inner_edge_density < 0.025 or inner_edge_density > 0.25:
+                    if inner_edge_density < 0.016 or inner_edge_density > 0.32:
                         continue
 
                     roi_bgr = small_bgr[ry : ry + rh, rx : rx + rw]
@@ -311,48 +325,49 @@ class Detector:
                     cb = ycrcb[:, :, 2]
                     skin_mask = (cr >= 135) & (cr <= 172) & (cb >= 77) & (cb <= 127)
                     skin_ratio = float(np.count_nonzero(skin_mask)) / float(cr.size)
-                    if skin_ratio > 0.12:
+                    if skin_ratio > 0.15:
                         continue
 
                     hsv = cv2.cvtColor(inner_bgr, cv2.COLOR_BGR2HSV)
                     mean_sat = float(np.mean(hsv[:, :, 1]))
                     mean_val = float(np.mean(hsv[:, :, 2]))
                     p75_val = float(np.percentile(hsv[:, :, 2], 75))
-                    # Bề mặt thẻ/giấy phải có nền sáng rõ (75th percentile độ sáng cao)
-                    if p75_val < 145.0:
+                    # Bề mặt thẻ/giấy có nền sáng
+                    if p75_val < 125.0:
                         continue
 
                     aspect = float(rw) / float(rh)
                     detected_cls = None
-                    # Thẻ ngang chuẩn ISO ID-1 (CCCD / Thẻ ngân hàng): tỷ lệ ~ 1.35 - 1.85
-                    if 1.35 <= aspect <= 1.85 and area < frame_area * 0.22:
-                        if mean_sat >= 45.0 and want("credit_card"):
+                    # Thẻ ngang chuẩn ISO ID-1 (CCCD / Thẻ ngân hàng): tỷ lệ ~ 1.25 - 1.95
+                    if 1.25 <= aspect <= 1.95 and area < frame_area * 0.28:
+                        if mean_sat >= 42.0 and want("credit_card"):
                             detected_cls = "credit_card"
                         elif want("id_card"):
                             detected_cls = "id_card"
                         elif want("credit_card"):
                             detected_cls = "credit_card"
-                    # Hóa đơn dọc (Receipt): hẹp và cao, nền giấy trắng sáng đồng nhất
+                    # Hóa đơn dọc (Receipt): hẹp và cao, nền giấy sáng
                     elif (
-                        0.40 <= aspect <= 0.72
-                        and mean_val >= 165.0
-                        and mean_sat <= 45.0
+                        0.36 <= aspect <= 0.75
+                        and mean_val >= 145.0
+                        and mean_sat <= 55.0
                         and want("receipt")
                     ):
                         detected_cls = "receipt"
-                    # Tài liệu giấy (Document): trang giấy trắng sáng đồng nhất
+                    # Tài liệu giấy (Document): trang giấy sáng
                     elif (
-                        0.72 <= aspect <= 1.35
-                        and area >= frame_area * 0.06
-                        and mean_val >= 165.0
-                        and mean_sat <= 45.0
+                        0.68 <= aspect <= 1.40
+                        and area >= frame_area * 0.05
+                        and mean_val >= 145.0
+                        and mean_sat <= 55.0
                         and want("document")
                     ):
                         detected_cls = "document"
 
                     if detected_cls is not None:
-                        conf = min(0.84, round(0.55 + inner_edge_density * 1.8, 2))
-                        if conf >= self.confidence:
+                        conf = min(0.92, round(0.68 + inner_edge_density * 2.2, 2))
+                        effective_thresh = min(float(self.confidence), 0.55)
+                        if conf >= effective_thresh:
                             x1 = int(round(rx * inv_scale_x))
                             y1 = int(round(ry * inv_scale_y))
                             x2 = int(round((rx + rw) * inv_scale_x))
