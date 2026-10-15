@@ -3,6 +3,7 @@ camera_worker.py — Luồng chạy camera nền (QThread) cho Privacy Shield Ap
 """
 
 import math
+import os
 import threading
 import time
 
@@ -27,6 +28,7 @@ class DemoVideoCapture:
         self.height = height
         self._opened = True
         self._tick = 0
+        self._last_read_time = 0.0
 
     def isOpened(self):
         return self._opened
@@ -41,6 +43,17 @@ class DemoVideoCapture:
     def read(self):
         if not self._opened:
             return False, None
+
+        # Điều nhịp thông minh (Adaptive Frame Pacing): trừ thời gian xử lý AI của frame trước
+        # để giữ chuẩn 30 FPS thay vì sleep cứng 30ms gây cộng dồn độ trễ.
+        now = time.perf_counter()
+        if self._last_read_time > 0.0:
+            elapsed = now - self._last_read_time
+            target_interval = 1.0 / 30.0
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
+        self._last_read_time = time.perf_counter()
+
         self._tick += 1
         t = self._tick * 0.06
         w, h = self.width, self.height
@@ -85,9 +98,8 @@ class DemoVideoCapture:
             cv2.line(frame, (rx1 + 12, ly), (rx2 - 14, ly), (60, 60, 60), 2)
         cv2.putText(frame, "TONG: 1.250.000 VND", (rx1 + 10, ry2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (10, 10, 10), 1)
 
-        # Thư mục lật ngược trước khi CameraWorker cv2.flip(frame, 1) để chữ xuôi chiều
+        # Lật ngược trước khi CameraWorker cv2.flip(frame, 1) để chữ xuôi chiều
         frame = cv2.flip(frame, 1)
-        time.sleep(0.03)
         return True, frame
 
     def release(self):
@@ -128,15 +140,27 @@ class CameraWorker(QThread):
         self.sleep_fn = sleep_fn or time.sleep
         self._capture = None
         self._config_lock = threading.Lock()
+        self._pipeline_lock = threading.Lock()
+        self._infer_lock = threading.Lock()
+        self._infer_event = threading.Event()
+        self._infer_stop = False
+        self._latest_infer_job = None
+        self._async_state = None
 
     @staticmethod
     def _default_capture_factory(device_index):
         if device_index == 2:
             return DemoVideoCapture()
+        if os.name == "nt":
+            # Ưu tiên DirectShow trên Windows để giảm độ trễ buffer phần cứng (MSMF thường trễ 4-5 frame)
+            cap = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                return cap
+            cap.release()
         return cv2.VideoCapture(device_index)
 
     def request_pose_enrollment(self, pose_index):
-        """Kích hoạt yêu cầu quét góc mặt mẫu cụ thể (0: nhìn thẳng, 1: nghiêng trái, 2: nghiêng phải)."""
+        """Kích hoạt yêu cầu quét góc mặt mẫu cụ thể (0: nhìn thẳng, 1: trái, 2: phải)."""
         with self._config_lock:
             self.enroll_pose_index = pose_index
             self.enroll_start_time = time.time()
@@ -184,19 +208,18 @@ class CameraWorker(QThread):
                 self.override_mask_mode,
                 list(self.selected_classes),
             )
-            # Apply pending pipeline config changes inside worker thread
-            pending_conf = getattr(self, '_pending_confidence', None)
-            pending_owner = getattr(self, '_pending_mask_owner', None)
-            pending_stranger = getattr(self, '_pending_mask_stranger', None)
-            pending_vcam = getattr(self, '_pending_vcam', None)
-            pending_default_mask = getattr(self, '_pending_default_mask_mode', None)
-            pending_expand = getattr(self, '_pending_expand_ratio', None)
-            pending_hold = getattr(self, '_pending_hold_frames', None)
-            pending_sched_en = getattr(self, '_pending_scheduler_enabled', None)
-            pending_sched_skip = getattr(self, '_pending_scheduler_skip_ratio', None)
-            pending_reset_tracking = getattr(self, '_pending_reset_tracking', False)
-            pending_face_delete = getattr(self, '_pending_face_delete', False)
-            pending_face_save = getattr(self, '_pending_face_save', False)
+            pending_conf = getattr(self, "_pending_confidence", None)
+            pending_owner = getattr(self, "_pending_mask_owner", None)
+            pending_stranger = getattr(self, "_pending_mask_stranger", None)
+            pending_vcam = getattr(self, "_pending_vcam", None)
+            pending_default_mask = getattr(self, "_pending_default_mask_mode", None)
+            pending_expand = getattr(self, "_pending_expand_ratio", None)
+            pending_hold = getattr(self, "_pending_hold_frames", None)
+            pending_sched_en = getattr(self, "_pending_scheduler_enabled", None)
+            pending_sched_skip = getattr(self, "_pending_scheduler_skip_ratio", None)
+            pending_reset_tracking = getattr(self, "_pending_reset_tracking", False)
+            pending_face_delete = getattr(self, "_pending_face_delete", False)
+            pending_face_save = getattr(self, "_pending_face_save", False)
             # Clear pending
             self._pending_confidence = None
             self._pending_mask_owner = None
@@ -210,34 +233,77 @@ class CameraWorker(QThread):
             self._pending_reset_tracking = False
             self._pending_face_delete = False
             self._pending_face_save = False
-        # Apply outside lock (pipeline mutations are now on worker thread)
-        if pending_conf is not None:
-            self.pipeline.detector.confidence = pending_conf
-        if pending_owner is not None:
-            self.pipeline.mask_owner_face = pending_owner
-        if pending_stranger is not None:
-            self.pipeline.mask_strangers_face = pending_stranger
+
+        has_pipeline_mutation = any([
+            pending_conf is not None,
+            pending_owner is not None,
+            pending_stranger is not None,
+            pending_default_mask is not None,
+            pending_expand is not None,
+            pending_hold is not None,
+            pending_sched_en is not None,
+            pending_sched_skip is not None,
+            pending_reset_tracking,
+            pending_face_delete,
+            pending_face_save,
+        ])
+        if has_pipeline_mutation:
+            with self._pipeline_lock:
+                if pending_conf is not None:
+                    self.pipeline.detector.confidence = pending_conf
+                if pending_owner is not None:
+                    self.pipeline.mask_owner_face = pending_owner
+                if pending_stranger is not None:
+                    self.pipeline.mask_strangers_face = pending_stranger
+                if pending_default_mask is not None and hasattr(self.pipeline, "masker"):
+                    self.pipeline.masker.default_mask_mode = pending_default_mask
+                if pending_expand is not None and hasattr(self.pipeline, "masker"):
+                    self.pipeline.masker.expand_ratio = pending_expand
+                if pending_hold is not None and hasattr(self.pipeline, "smoothing"):
+                    self.pipeline.smoothing.hold_frames = pending_hold
+                if pending_sched_en is not None and hasattr(self.pipeline, "scheduler"):
+                    self.pipeline.scheduler.enabled = pending_sched_en
+                if pending_sched_skip is not None and hasattr(self.pipeline, "scheduler"):
+                    self.pipeline.scheduler.skip_ratio = max(1, pending_sched_skip)
+                if pending_reset_tracking and hasattr(self.pipeline, "reset_tracking"):
+                    self.pipeline.reset_tracking()
+                    with self._infer_lock:
+                        self._async_state = None
+                if pending_face_delete:
+                    removed = self.pipeline.face_recognizer.delete_registered_faces()
+                    self.face_delete_result.emit(removed)
+                if pending_face_save:
+                    self.pipeline.face_recognizer.save_registered_faces()
+
         if pending_vcam is not None:
             self._apply_vcam_change(pending_vcam)
-        if pending_default_mask is not None and hasattr(self.pipeline, "masker"):
-            self.pipeline.masker.default_mask_mode = pending_default_mask
-        if pending_expand is not None and hasattr(self.pipeline, "masker"):
-            self.pipeline.masker.expand_ratio = pending_expand
-        if pending_hold is not None and hasattr(self.pipeline, "smoothing"):
-            self.pipeline.smoothing.hold_frames = pending_hold
-        if pending_sched_en is not None and hasattr(self.pipeline, "scheduler"):
-            self.pipeline.scheduler.enabled = pending_sched_en
-        if pending_sched_skip is not None and hasattr(self.pipeline, "scheduler"):
-            self.pipeline.scheduler.skip_ratio = max(1, pending_sched_skip)
-        if pending_reset_tracking and hasattr(self.pipeline, "reset_tracking"):
-            self.pipeline.reset_tracking()
-        if pending_face_delete:
-            removed = self.pipeline.face_recognizer.delete_registered_faces()
-            self.face_delete_result.emit(removed)
-        if pending_face_save:
-            self.pipeline.face_recognizer.save_registered_faces()
         return config
 
+    def _inference_worker_loop(self):
+        """Luồng suy luận AI chạy nền tách biệt khỏi luồng xuất hình camera (Zero-Stutter Streaming)."""
+        while not self._infer_stop and self.running:
+            if not self._infer_event.wait(timeout=0.05):
+                continue
+            self._infer_event.clear()
+            if self._infer_stop or not self.running:
+                break
+            with self._infer_lock:
+                job = self._latest_infer_job
+                self._latest_infer_job = None
+            if job is None:
+                continue
+            infer_frame, infer_classes = job
+            try:
+                with self._pipeline_lock:
+                    dets, unsupported, infer_ms = self.pipeline.detect_and_smooth(
+                        infer_frame, selected_classes=infer_classes
+                    )
+                with self._infer_lock:
+                    self._async_state = (list(dets), list(unsupported), float(infer_ms), None)
+            except Exception as exc:
+                logger.error("Async inference error: %s", exc, exc_info=True)
+                with self._infer_lock:
+                    self._async_state = ([], [], 0.0, str(exc))
 
     def _apply_vcam_change(self, enabled):
         """Bật/tắt virtual camera output trong worker thread."""
@@ -265,17 +331,19 @@ class CameraWorker(QThread):
         cap = self.capture_factory(self.device_index)
         self._capture = cap
 
-        # Thiết lập kích thước mặc định cho camera để tối ưu hóa CPU
+        # Thiết lập kích thước mặc định và giảm tối đa độ trễ buffer phần cứng
         width = self.pipeline.config.get("camera.width", 640)
         height = self.pipeline.config.get("camera.height", 480)
+        requested_fps = self.pipeline.config.get("camera.fps", 30)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        requested_fps = self.pipeline.config.get("camera.fps", 30)
+        cap.set(cv2.CAP_PROP_FPS, requested_fps)
         max_read_failures = self.pipeline.config.get("camera.max_read_failures", 30)
         retry_delay = (
             self.pipeline.config.get("camera.read_retry_delay_ms", 30) / 1000.0
         )
-        cap.set(cv2.CAP_PROP_FPS, requested_fps)
 
         if self.virtual_output is None and self.pipeline.config.get(
             "output.virtual_camera.enabled", False
@@ -291,123 +359,209 @@ class CameraWorker(QThread):
 
         if not cap.isOpened():
             logger.error("Cannot open camera index %d", self.device_index)
-            # Gửi tín hiệu báo lỗi về UI
             self.running = False
             self.camera_error.emit(f"Không mở được camera index {self.device_index}")
+
+        use_async = hasattr(self.pipeline, "detect_and_smooth") and hasattr(
+            self.pipeline, "render_masked_frame"
+        )
+        infer_thread = None
+        self._infer_stop = False
+        self._async_state = None
+        self._latest_infer_job = None
+        if use_async and self.running:
+            infer_thread = threading.Thread(
+                target=self._inference_worker_loop,
+                name="PrivacyShield-AI-Worker",
+                daemon=True,
+            )
+            infer_thread.start()
 
         consecutive_read_failures = 0
         last_frame_time = time.perf_counter()
 
-        while self.running:
-            ret, frame = cap.read()
-            if not ret:
-                consecutive_read_failures += 1
-                if consecutive_read_failures >= max_read_failures:
-                    fallback = self.pipeline.privacy_screen(
-                        self._blank_frame(width, height), "CAMERA DISCONNECTED"
-                    )
-                    self._emit_frame(
-                        fallback,
-                        {
-                            "fps": 0.0,
-                            "latency_ms": 0.0,
-                            "detected_count": 0,
-                            "detections": [],
-                            "state": "error",
-                            "error": "camera disconnected",
-                        },
-                    )
-                    self.camera_error.emit("Camera mất kết nối")
-                    break
-                self.sleep_fn(retry_delay)
-                continue
-            consecutive_read_failures = 0
+        try:
+            while self.running:
+                ret, frame = cap.read()
+                if not ret:
+                    consecutive_read_failures += 1
+                    if consecutive_read_failures >= max_read_failures:
+                        fallback = self.pipeline.privacy_screen(
+                            self._blank_frame(width, height), "CAMERA DISCONNECTED"
+                        )
+                        self._emit_frame(
+                            fallback,
+                            {
+                                "fps": 0.0,
+                                "latency_ms": 0.0,
+                                "detected_count": 0,
+                                "detections": [],
+                                "state": "error",
+                                "error": "camera disconnected",
+                            },
+                        )
+                        self.camera_error.emit("Camera mất kết nối")
+                        break
+                    self.sleep_fn(retry_delay)
+                    continue
+                consecutive_read_failures = 0
 
-            # 1. Lật gương hình ảnh ngang theo chiều tự nhiên (Mirror)
-            frame = cv2.flip(frame, 1)
+                # 1. Lật gương hình ảnh ngang theo chiều tự nhiên (Mirror)
+                frame = cv2.flip(frame, 1)
 
-            # Xử lý yêu cầu quét góc mặt mẫu (Multi-Pose Enrollment)
-            if self.enroll_pose_index >= 0:
-                faces = self.pipeline.face_recognizer.detect_faces(frame)
-                if faces:
-                    # Lấy khuôn mặt lớn nhất ở gần camera nhất
-                    best_face = max(faces, key=lambda f: f["bbox"][2] * f["bbox"][3])
-                    xmin, ymin, w, h = best_face["bbox"]
+                # Xử lý yêu cầu quét góc mặt mẫu (Multi-Pose Enrollment)
+                if self.enroll_pose_index >= 0:
+                    with self._pipeline_lock:
+                        faces = self.pipeline.face_recognizer.detect_faces(frame)
+                        if faces:
+                            best_face = max(faces, key=lambda f: f["bbox"][2] * f["bbox"][3])
+                            xmin, ymin, w, h = best_face["bbox"]
 
-                    if w >= 100 and h >= 100:
-                        # Xác định góc nghiêng mặt thực tế bằng landmark
-                        detected_pose = self.pipeline.face_recognizer.estimate_head_pose(best_face["face_object"])
-                        if detected_pose != self.enroll_pose_index:
-                            pose_names = {0: "Nhìn Thẳng", 1: "Nghiêng Trái", 2: "Nghiêng Phải"}
-                            detected_names = {-2: "Cúi/Ngửa đầu", 0: "Nhìn Thẳng", 1: "Nghiêng Trái", 2: "Nghiêng Phải"}
-                            # Nếu quá 5 giây không đúng góc mặt, kích hoạt timeout
-                            if time.time() - self.enroll_start_time > 5.0:
-                                idx = self.enroll_pose_index
-                                self.enroll_pose_index = -1
-                                self.enroll_result.emit(False, f"Đăng ký thất bại: Phát hiện tư thế {detected_names.get(detected_pose, 'Không xác định')} (Yêu cầu: {pose_names[idx]}). Hãy thực hiện đúng hướng dẫn!")
-                        else:
-                            success = self.pipeline.face_recognizer.register_face_pose(frame, best_face["bbox"], self.enroll_pose_index)
-                            if success:
-                                idx = self.enroll_pose_index
-                                self.enroll_pose_index = -1  # Reset trạng thái quét
-                                self.enroll_result.emit(True, f"Đã quét thành công góc mặt {idx + 1}/3!")
+                            if w >= 100 and h >= 100:
+                                detected_pose = self.pipeline.face_recognizer.estimate_head_pose(
+                                    best_face["face_object"]
+                                )
+                                if detected_pose != self.enroll_pose_index:
+                                    pose_names = {
+                                        0: "Nhìn Thẳng",
+                                        1: "Nghiêng Trái",
+                                        2: "Nghiêng Phải",
+                                    }
+                                    detected_names = {
+                                        -2: "Cúi/Ngửa đầu",
+                                        0: "Nhìn Thẳng",
+                                        1: "Nghiêng Trái",
+                                        2: "Nghiêng Phải",
+                                    }
+                                    if time.time() - self.enroll_start_time > 5.0:
+                                        idx = self.enroll_pose_index
+                                        self.enroll_pose_index = -1
+                                        self.enroll_result.emit(
+                                            False,
+                                            f"Đăng ký thất bại: Phát hiện tư thế {detected_names.get(detected_pose, 'Không xác định')} (Yêu cầu: {pose_names[idx]}). Hãy thực hiện đúng hướng dẫn!",
+                                        )
+                                else:
+                                    success = self.pipeline.face_recognizer.register_face_pose(
+                                        frame, best_face["bbox"], self.enroll_pose_index
+                                    )
+                                    if success:
+                                        idx = self.enroll_pose_index
+                                        self.enroll_pose_index = -1
+                                        self.enroll_result.emit(
+                                            True, f"Đã quét thành công góc mặt {idx + 1}/3!"
+                                        )
+                                    else:
+                                        self.enroll_pose_index = -1
+                                        self.enroll_result.emit(
+                                            False,
+                                            "Đăng ký thất bại: Lỗi trích xuất vector đặc trưng.",
+                                        )
                             else:
+                                if time.time() - self.enroll_start_time > 5.0:
+                                    self.enroll_pose_index = -1
+                                    self.enroll_result.emit(
+                                        False,
+                                        "Đăng ký thất bại: Hãy di chuyển khuôn mặt lại gần camera hơn!",
+                                    )
+                        else:
+                            if time.time() - self.enroll_start_time > 4.0:
                                 self.enroll_pose_index = -1
-                                self.enroll_result.emit(False, "Đăng ký thất bại: Lỗi trích xuất vector đặc trưng.")
+                                self.enroll_result.emit(
+                                    False,
+                                    "Đăng ký thất bại: Không tìm thấy khuôn mặt rõ ràng trong khung hình!",
+                                )
+
+                # 2. Xử lý qua pipeline (thread-safe config read)
+                safe_mode, override_mask, classes = self._get_config()
+                if safe_mode:
+                    self.pipeline.masker.override_mask_mode = override_mask
+                    if not use_async:
+                        processed_frame, metrics = self.pipeline.process_frame(
+                            frame, selected_classes=classes
+                        )
                     else:
-                        if time.time() - self.enroll_start_time > 5.0:
-                            self.enroll_pose_index = -1
-                            self.enroll_result.emit(False, "Đăng ký thất bại: Hãy di chuyển khuôn mặt lại gần camera hơn!")
+                        with self._infer_lock:
+                            async_state = self._async_state
+
+                        if async_state is None:
+                            # Frame đầu tiên: chạy đồng bộ 1 lần để đảm bảo Fail-Closed ngay từ frame 0
+                            try:
+                                with self._pipeline_lock:
+                                    dets, unsupported, infer_ms = self.pipeline.detect_and_smooth(
+                                        frame, selected_classes=classes
+                                    )
+                                async_state = (list(dets), list(unsupported), float(infer_ms), None)
+                            except Exception as exc:
+                                logger.error("Initial inference error: %s", exc, exc_info=True)
+                                if not getattr(self.pipeline, "fail_safe", True):
+                                    raise
+                                async_state = ([], [], 0.0, str(exc))
+                            with self._infer_lock:
+                                self._async_state = async_state
+                        else:
+                            # Các frame tiếp theo: đẩy frame mới nhất sang luồng AI nền (không chặn luồng video)
+                            with self._infer_lock:
+                                self._latest_infer_job = (frame, list(classes))
+                            self._infer_event.set()
+
+                        dets, unsupported, infer_ms, err_msg = async_state
+                        if err_msg is not None:
+                            if getattr(self.pipeline, "fail_safe", True):
+                                processed_frame = self.pipeline.privacy_screen(
+                                    frame, "PIPELINE ERROR - SAFE MODE ACTIVE"
+                                )
+                                metrics = {
+                                    "fps": 0.0,
+                                    "latency_ms": 0.0,
+                                    "detected_count": 0,
+                                    "detections": [],
+                                    "error": err_msg,
+                                    "state": "error",
+                                }
+                            else:
+                                raise RuntimeError(err_msg)
+                        else:
+                            processed_frame, metrics = self.pipeline.render_masked_frame(
+                                frame, dets, unsupported, infer_ms
+                            )
                 else:
-                    if time.time() - self.enroll_start_time > 4.0:
-                        self.enroll_pose_index = -1
-                        self.enroll_result.emit(False, "Đăng ký thất bại: Không tìm thấy khuôn mặt rõ ràng trong khung hình!")
+                    # Paused remains fail-closed: never expose raw pixels.
+                    processed_frame = self.pipeline.privacy_screen(frame, "PROTECTION PAUSED")
+                    now = time.perf_counter()
+                    elapsed = now - last_frame_time
+                    last_frame_time = now
+                    metrics = {
+                        "fps": round(1.0 / elapsed, 1) if elapsed > 0 else 0.0,
+                        "latency_ms": 0.0,
+                        "detected_count": 0,
+                        "detections": [],
+                        "state": "paused_safe",
+                    }
 
-            # 2. Xử lý qua pipeline (thread-safe config read)
-            safe_mode, override_mask, classes = self._get_config()
-            if safe_mode:
-                # Truyền cấu hình override vào masker của pipeline trước khi xử lý
-                self.pipeline.masker.override_mask_mode = override_mask
+                if self.virtual_output is not None:
+                    try:
+                        self.virtual_output.send_bgr(processed_frame)
+                    except Exception as exc:
+                        metrics["virtual_camera_error"] = str(exc)
+                        self.camera_error.emit(f"Virtual camera lỗi: {exc}")
+                        self.virtual_output.close()
+                        self.virtual_output = None
 
-                # Thực hiện suy luận và che các đối tượng nhạy cảm
-                processed_frame, metrics = self.pipeline.process_frame(
-                    frame,
-                    selected_classes=classes
-                )
-            else:
-                # Paused remains fail-closed: never expose raw pixels.
-                processed_frame = self.pipeline.privacy_screen(frame, "PROTECTION PAUSED")
-                now = time.perf_counter()
-                elapsed = now - last_frame_time
-                last_frame_time = now
-                metrics = {
-                    "fps": round(1.0 / elapsed, 1) if elapsed > 0 else 0.0,
-                    "latency_ms": 0.0,
-                    "detected_count": 0,
-                    "detections": [],
-                    "state": "paused_safe",
-                }
+                self._emit_frame(processed_frame, metrics)
 
+                # Nhịp thở cho thread
+                self.sleep_fn(0.001)
+        finally:
+            self._infer_stop = True
+            self._infer_event.set()
+            if infer_thread is not None and infer_thread.is_alive():
+                infer_thread.join(timeout=2.0)
+            cap.release()
+            self._capture = None
             if self.virtual_output is not None:
-                try:
-                    self.virtual_output.send_bgr(processed_frame)
-                except Exception as exc:
-                    metrics["virtual_camera_error"] = str(exc)
-                    self.camera_error.emit(f"Virtual camera lỗi: {exc}")
-                    self.virtual_output.close()
-                    self.virtual_output = None
-
-            self._emit_frame(processed_frame, metrics)
-
-            # Nhịp thở cho thread
-            self.sleep_fn(0.001)
-
-        cap.release()
-        self._capture = None
-        if self.virtual_output is not None:
-            self.virtual_output.close()
-        self.pipeline.reset_tracking()
-        logger.info("Capture and output resources released")
+                self.virtual_output.close()
+            self.pipeline.reset_tracking()
+            logger.info("Capture and output resources released")
 
     @staticmethod
     def _blank_frame(width, height):

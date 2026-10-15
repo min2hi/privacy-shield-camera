@@ -112,3 +112,50 @@ def test_face_masking_fail_closed_owner():
     assert len(metrics["detections"]) == 1
     assert metrics["detections"][0]["class_name"] == "face"
     assert metrics["detections"][0]["mask_mode"] == "gaussian_blur"
+
+
+def test_decoupled_detect_and_render_masked_frame():
+    pipeline = PrivacyPipeline.__new__(PrivacyPipeline)
+    pipeline.detector = type(
+        "MockDetector",
+        (),
+        {
+            "supported_class_names": {"cell phone"},
+            "detect": lambda self, f, selected_classes=None: [
+                {"bbox": (2, 2, 12, 12), "class_name": "cell phone", "confidence": 0.9}
+            ],
+        },
+    )()
+    pipeline.scheduler = type(
+        "MockScheduler",
+        (),
+        {"should_detect": lambda self: True, "update_detections": lambda self, d: None},
+    )()
+    pipeline.face_rec_enabled = False
+    pipeline.smoothing = type("MockSmoothing", (), {"update": lambda self, d: d})()
+    pipeline.masker = type(
+        "MockMasker",
+        (),
+        {"apply_masks": lambda self, f, d: np.zeros_like(f) if d else f},
+    )()
+    pipeline.fail_safe = True
+    pipeline.last_time = 0.0
+    pipeline.fps = 0.0
+
+    raw = np.full((20, 20, 3), 200, dtype=np.uint8)
+    detections, unsupported_classes, infer_ms = pipeline.detect_and_smooth(
+        raw, selected_classes=["cell phone", "unknown_class"]
+    )
+    assert unsupported_classes == ["unknown_class"]
+    assert infer_ms >= 0.0
+    assert len(detections) == 1
+
+    masked, metrics = pipeline.render_masked_frame(
+        raw, detections, unsupported_classes, infer_ms
+    )
+    assert metrics["state"] == "protected"
+    assert metrics["unsupported_classes"] == ["unknown_class"]
+    assert len(metrics["detections"]) == 1
+    assert np.all(masked == 0)
+
+

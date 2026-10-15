@@ -134,8 +134,12 @@ class MetricCard(QFrame):
         outer_layout.addLayout(content_layout, 1)
 
     def update_value(self, value: str, unit: str = "") -> None:
-        """Cập nhật giá trị hiển thị."""
-        self.value_label.setText(f"{value} {unit}".strip())
+        """Cập nhật giá trị hiển thị (có cache chống vẽ lại thừa khi giá trị không đổi)."""
+        new_text = f"{value} {unit}".strip()
+        if getattr(self, "_last_text", None) == new_text:
+            return
+        self._last_text = new_text
+        self.value_label.setText(new_text)
 
     def set_value_color(self, color_hex: str) -> None:
         """Thay đổi màu chữ và thanh chỉ báo động — có cache để tránh re-parse CSS."""
